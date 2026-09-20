@@ -2,13 +2,17 @@ package com.herotux.sarrastwebview;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
 import android.view.View;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
@@ -109,6 +113,45 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void exportCurrentPageToPdf(WebView webView) {
+        if (webView == null || webView.getUrl() == null) {
+            Toast.makeText(this, "صفحه‌ای برای خروجی PDF وجود ندارد",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        PrintManager printManager =
+                (PrintManager) getSystemService(Context.PRINT_SERVICE);
+
+        if (printManager == null) {
+            Toast.makeText(this, "امکان ساخت PDF در این دستگاه وجود ندارد",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String title = webView.getTitle();
+        if (title == null || title.trim().isEmpty()) {
+            title = "Sarrast";
+        }
+
+        String jobName = title.replaceAll("[\\/:*?\"<>|]", "_").trim();
+        if (jobName.isEmpty()) {
+            jobName = "Sarrast";
+        }
+
+        android.print.PrintDocumentAdapter adapter =
+                webView.createPrintDocumentAdapter(jobName);
+
+        PrintAttributes attributes = new PrintAttributes.Builder()
+                .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                .setResolution(new PrintAttributes.Resolution(
+                        "sarrast_pdf", "PDF", 300, 300))
+                .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                .build();
+
+        printManager.print(jobName, adapter, attributes);
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -119,6 +162,10 @@ public class MainActivity extends Activity {
         loadingProgress = findViewById(R.id.loadingProgress);
 
         WebView webView = findViewById(R.id.webView);
+        Button pdfButton = findViewById(R.id.pdfButton);
+
+        pdfButton.setOnClickListener(v -> exportCurrentPageToPdf(webView));
+
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
@@ -137,7 +184,8 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            public void onPageStarted(WebView view, String url,
+                                      android.graphics.Bitmap favicon) {
                 showLoading();
             }
 
