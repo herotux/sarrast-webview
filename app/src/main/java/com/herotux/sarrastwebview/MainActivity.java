@@ -11,9 +11,9 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private static final String START_URL =
-            "https://mysite.com/series/something/item";
+            "https://www.sarrast.com/";
 
-    private static final String ALLOWED_TARGET_HOST = "mysite.com";
+    private static final String ALLOWED_TARGET_HOST = "sarrast.com";
 
     private static boolean isAllowedTarget(Uri uri) {
         if (uri == null) return false;
@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // Only mysite.com and its subdomains may load.
+        // Only sarrast.com and its subdomains may load.
         if (isAllowedTarget(uri)) {
             return false;
         }
