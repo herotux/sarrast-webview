@@ -5,9 +5,11 @@ import android.app.Activity;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.ProgressBar;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
@@ -19,6 +21,7 @@ public class MainActivity extends Activity {
     private static final String LAST_URL_KEY = "last_url";
 
     private SharedPreferences preferences;
+    private ProgressBar loadingProgress;
 
     private static boolean isAllowedTarget(Uri uri) {
         if (uri == null) return false;
@@ -76,6 +79,7 @@ public class MainActivity extends Activity {
                     Uri destination = Uri.parse(target);
 
                     if (isAllowedTarget(destination)) {
+                        showLoading();
                         view.loadUrl(destination.toString());
                         return true;
                     }
@@ -90,11 +94,19 @@ public class MainActivity extends Activity {
 
         // Only sarrast.com and its subdomains may load.
         if (isAllowedTarget(uri)) {
+            showLoading();
             return false;
         }
 
         block();
         return true;
+    }
+
+    private void showLoading() {
+        if (loadingProgress != null) {
+            loadingProgress.setProgress(0);
+            loadingProgress.setVisibility(View.VISIBLE);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -104,6 +116,7 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        loadingProgress = findViewById(R.id.loadingProgress);
 
         WebView webView = findViewById(R.id.webView);
         webView.getSettings().setJavaScriptEnabled(true);
@@ -124,15 +137,49 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                showLoading();
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 saveLastUrl(url);
+                if (loadingProgress != null) {
+                    loadingProgress.setProgress(100);
+                    loadingProgress.setVisibility(View.GONE);
+                }
+            }
+
+            @Override
+            public void onReceivedError(
+                    WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                if (request.isForMainFrame() && loadingProgress != null) {
+                    loadingProgress.setVisibility(View.GONE);
+                }
+            }
+        });
+
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                if (loadingProgress != null) {
+                    if (newProgress < 100) {
+                        loadingProgress.setVisibility(View.VISIBLE);
+                        loadingProgress.setProgress(newProgress);
+                    } else {
+                        loadingProgress.setProgress(100);
+                    }
+                }
             }
         });
 
         String lastUrl = preferences.getString(LAST_URL_KEY, null);
         if (lastUrl != null && isAllowedTarget(Uri.parse(lastUrl))) {
+            showLoading();
             webView.loadUrl(lastUrl);
         } else {
+            showLoading();
             webView.loadUrl(START_URL);
         }
     }
@@ -142,6 +189,7 @@ public class MainActivity extends Activity {
         WebView webView = findViewById(R.id.webView);
 
         if (webView.canGoBack()) {
+            showLoading();
             webView.goBack();
         } else {
             super.onBackPressed();
