@@ -11,9 +11,9 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private static final String START_URL =
-            "https://example.com/series/something/item";
+            "https://mysite.com/series/something/item";
 
-    private static final String ALLOWED_TARGET_HOST = "example.com";
+    private static final String ALLOWED_TARGET_HOST = "mysite.com";
 
     private static boolean isAllowedTarget(Uri uri) {
         if (uri == null) return false;
@@ -53,7 +53,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // Do not open Ouo. Extract its s= destination and validate it first.
+        // Ouo is only an accepted link wrapper. Never open Ouo itself.
         if (isOuo(uri)) {
             String target = uri.getQueryParameter("s");
 
@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
                         return true;
                     }
                 } catch (Exception ignored) {
-                    // Fall through to the blocked state.
+                    // Fall through to blocked state.
                 }
             }
 
@@ -74,6 +74,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        // Only mysite.com and its subdomains may load.
         if (isAllowedTarget(uri)) {
             return false;
         }
