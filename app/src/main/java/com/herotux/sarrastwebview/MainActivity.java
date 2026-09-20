@@ -2,6 +2,7 @@ package com.herotux.sarrastwebview;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebResourceRequest;
@@ -14,6 +15,10 @@ public class MainActivity extends Activity {
             "https://www.sarrast.com/";
 
     private static final String ALLOWED_TARGET_HOST = "sarrast.com";
+    private static final String PREFS_NAME = "webview_state";
+    private static final String LAST_URL_KEY = "last_url";
+
+    private SharedPreferences preferences;
 
     private static boolean isAllowedTarget(Uri uri) {
         if (uri == null) return false;
@@ -45,6 +50,15 @@ public class MainActivity extends Activity {
 
     private void block() {
         Toast.makeText(this, "این لینک مجاز نیست", Toast.LENGTH_SHORT).show();
+    }
+
+    private void saveLastUrl(String url) {
+        if (url == null || url.isEmpty()) return;
+
+        Uri uri = Uri.parse(url);
+        if (isAllowedTarget(uri)) {
+            preferences.edit().putString(LAST_URL_KEY, url).apply();
+        }
     }
 
     private boolean handleUrl(WebView view, Uri uri) {
@@ -89,6 +103,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+
         WebView webView = findViewById(R.id.webView);
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
@@ -106,9 +122,19 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return handleUrl(view, Uri.parse(url));
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                saveLastUrl(url);
+            }
         });
 
-        webView.loadUrl(START_URL);
+        String lastUrl = preferences.getString(LAST_URL_KEY, null);
+        if (lastUrl != null && isAllowedTarget(Uri.parse(lastUrl))) {
+            webView.loadUrl(lastUrl);
+        } else {
+            webView.loadUrl(START_URL);
+        }
     }
 
     @Override
