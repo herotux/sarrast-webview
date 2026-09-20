@@ -11,7 +11,7 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private static final String START_URL =
-            "http://ouo.io/qs/9I7TYR18?s=https://sarrast.com/series/cuckoldsex/5-schoolgirl";
+            "https://sarrast.com/series/cuckoldsex/5-schoolgirl";
 
     private static boolean isAllowed(Uri uri) {
         if (uri == null) return false;
@@ -60,7 +60,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        // The initial URL is intentionally the supplied Ouo redirect.
+        // Open the target directly; no Ouo redirect.
         webView.loadUrl(START_URL);
     }
 
