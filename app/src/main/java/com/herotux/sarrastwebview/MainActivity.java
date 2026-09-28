@@ -10,6 +10,7 @@ import android.print.PrintAttributes;
 import android.print.PrintManager;
 import android.view.View;
 import android.view.Window;
+import android.webkit.ValueCallback;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -27,6 +28,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences preferences;
     private ProgressBar loadingProgress;
+    private Button pdfButton;
 
     private static boolean isAllowedTarget(Uri uri) {
         if (uri == null) return false;
@@ -121,36 +123,72 @@ public class MainActivity extends Activity {
             return;
         }
 
-        PrintManager printManager =
-                (PrintManager) getSystemService(Context.PRINT_SERVICE);
-
-        if (printManager == null) {
-            Toast.makeText(this, "امکان ساخت PDF در این دستگاه وجود ندارد",
-                    Toast.LENGTH_SHORT).show();
-            return;
+        if (pdfButton != null) {
+            pdfButton.setEnabled(false);
         }
 
-        String title = webView.getTitle();
-        if (title == null || title.trim().isEmpty()) {
-            title = "Sarrast";
-        }
+        Toast.makeText(this, "در حال آماده‌سازی کل محتوای صفحه…",
+                Toast.LENGTH_SHORT).show();
 
-        String jobName = title.replaceAll("[\\/:*?\"<>|]", "_").trim();
-        if (jobName.isEmpty()) {
-            jobName = "Sarrast";
-        }
+        // Walk through the complete document first. This triggers lazy-loaded
+        // content/images as the page is scrolled, then returns to the top.
+        String script =
+                "(async function() {" +
+                "  const wait = ms => new Promise(r => setTimeout(r, ms));" +
+                "  let lastHeight = 0, stable = 0;" +
+                "  for (let i = 0; i < 80 && stable < 3; i++) {" +
+                "    const h = Math.max(document.body.scrollHeight," +
+                "      document.documentElement.scrollHeight);" +
+                "    window.scrollTo(0, h);" +
+                "    await wait(180);" +
+                "    const nh = Math.max(document.body.scrollHeight," +
+                "      document.documentElement.scrollHeight);" +
+                "    if (nh === lastHeight) stable++; else stable = 0;" +
+                "    lastHeight = nh;" +
+                "  }" +
+                "  window.scrollTo(0, 0);" +
+                "  await wait(500);" +
+                "  return true;" +
+                "})()";
 
-        android.print.PrintDocumentAdapter adapter =
-                webView.createPrintDocumentAdapter(jobName);
+        webView.evaluateJavascript(script, value -> {
+            PrintManager printManager =
+                    (PrintManager) getSystemService(Context.PRINT_SERVICE);
 
-        PrintAttributes attributes = new PrintAttributes.Builder()
-                .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                .setResolution(new PrintAttributes.Resolution(
-                        "sarrast_pdf", "PDF", 300, 300))
-                .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-                .build();
+            if (printManager == null) {
+                if (pdfButton != null) pdfButton.setEnabled(true);
+                Toast.makeText(this, "امکان ساخت PDF در این دستگاه وجود ندارد",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
 
-        printManager.print(jobName, adapter, attributes);
+            String title = webView.getTitle();
+            if (title == null || title.trim().isEmpty()) {
+                title = "Sarrast";
+            }
+
+            String jobName = title.replaceAll("[\\\\/:*?\\\"<>|]", "_")
+                    .trim();
+            if (jobName.isEmpty()) {
+                jobName = "Sarrast";
+            }
+
+            android.print.PrintDocumentAdapter adapter =
+                    webView.createPrintDocumentAdapter(jobName);
+
+            PrintAttributes attributes = new PrintAttributes.Builder()
+                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                    .setResolution(new PrintAttributes.Resolution(
+                            "sarrast_pdf", "PDF", 300, 300))
+                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                    .build();
+
+            printManager.print(jobName, adapter, attributes);
+
+            if (pdfButton != null) {
+                pdfButton.postDelayed(() -> pdfButton.setEnabled(true), 1000);
+            }
+        });
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -163,10 +201,7 @@ public class MainActivity extends Activity {
         Window window = getWindow();
         window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
         window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
-        window.getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        hideSystemBars();
 
         setContentView(R.layout.activity_main);
 
@@ -174,7 +209,7 @@ public class MainActivity extends Activity {
         loadingProgress = findViewById(R.id.loadingProgress);
 
         WebView webView = findViewById(R.id.webView);
-        Button pdfButton = findViewById(R.id.pdfButton);
+        pdfButton = findViewById(R.id.pdfButton);
 
         pdfButton.setOnClickListener(v -> exportCurrentPageToPdf(webView));
 
@@ -241,6 +276,24 @@ public class MainActivity extends Activity {
         } else {
             showLoading();
             webView.loadUrl(START_URL);
+        }
+    }
+
+    private void hideSystemBars() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            hideSystemBars();
         }
     }
 
