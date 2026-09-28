@@ -29,6 +29,15 @@
         android:textAllCaps="false" />
 
     <Button
+        android:id="@+id/downloadsButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="16dp"
+        android:text="PDFهای من"
+        android:textAllCaps="false" />
+
+    <Button
         android:id="@+id/pdfButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
