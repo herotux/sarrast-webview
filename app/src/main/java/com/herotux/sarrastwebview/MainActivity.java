@@ -31,8 +31,6 @@ import android.widget.ArrayAdapter;
 import android.app.AlertDialog;
 import android.widget.ProgressBar;
 import android.widget.Toast;
-import android.widget.EditText;
-import android.text.InputType;
 import java.io.File;
 
 public class MainActivity extends Activity {
@@ -47,6 +45,7 @@ public class MainActivity extends Activity {
     private ProgressBar loadingProgress;
     private Button pdfButton;
     private Button linksPdfButton;
+    private Button downloadsButton;
     private WebView backgroundWebView;
     private java.util.ArrayList<LinkItem> downloadQueue;
     private int downloadIndex = 0;
@@ -483,6 +482,33 @@ public class MainActivity extends Activity {
         startCurrentPagePdfExport(webView);
     }
 
+    private void startCurrentPagePdfExport(WebView webView) {
+        Toast.makeText(this, "در حال آماده‌سازی PDF…", Toast.LENGTH_SHORT).show();
+        String script="(async function(){const w=ms=>new Promise(r=>setTimeout(r,ms));let last=0,stable=0;for(let i=0;i<80&&stable<3;i++){let h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.scrollTo(0,h);await w(120);let nh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);if(nh===last)stable++;else stable=0;last=nh;}window.scrollTo(0,0);await w(400);return true;})()";
+        webView.evaluateJavascript(script,v -> {
+            String title=sanitizeFileName(webView.getTitle());
+            if(TextUtils.isEmpty(title)) title="Sarrast";
+            File temp=new File(getCacheDir(),"sarrast_"+System.nanoTime()+".pdf");
+            PrintDocumentAdapter adapter=webView.createPrintDocumentAdapter(title);
+            PrintAttributes attrs=new PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                    .setResolution(new PrintAttributes.Resolution("sarrast","PDF",300,300))
+                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS).build();
+            writeAdapterToFile(adapter,attrs,temp,new PdfWriteCallback(){
+                public void onSuccess(){try{
+                    ContentValues cv=new ContentValues();
+                    cv.put(MediaStore.Downloads.DISPLAY_NAME,title+".pdf");
+                    cv.put(MediaStore.Downloads.MIME_TYPE,"application/pdf");
+                    if(Build.VERSION.SDK_INT>=29) cv.put(MediaStore.Downloads.RELATIVE_PATH,android.os.Environment.DIRECTORY_DOWNLOADS+"/Sarrast/");
+                    Uri u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);
+                    if(u==null) throw new Exception("output");
+                    copyFileToUri(temp,u); temp.delete();
+                    Toast.makeText(MainActivity.this,"PDF ذخیره شد",Toast.LENGTH_LONG).show();
+                }catch(Exception e){temp.delete();Toast.makeText(MainActivity.this,"خطا در ساخت PDF",Toast.LENGTH_SHORT).show();}}
+                public void onFailure(){temp.delete();Toast.makeText(MainActivity.this,"خطا در ساخت PDF",Toast.LENGTH_SHORT).show();}
+            });
+        });
+    }
+
     private interface PdfWriteCallback {
         void onSuccess();
         void onFailure();
@@ -504,7 +530,7 @@ public class MainActivity extends Activity {
                         @Override public void onLayoutFinished(
                                 android.print.PrintDocumentInfo info, boolean changed) {
                             adapter.onWrite(
-                                    new PrintDocumentAdapter.PageRange[]{android.print.PageRange.ALL_PAGES},
+                                    new android.print.PageRange[]{android.print.PageRange.ALL_PAGES},
                                     pfd, new CancellationSignal(),
                                     new PrintDocumentAdapter.WriteResultCallback() {
                                         @Override public void onWriteFinished(
@@ -665,7 +691,6 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
 
-        PDFBoxResourceLoader.init(getApplicationContext());
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadingProgress = findViewById(R.id.loadingProgress);
 
