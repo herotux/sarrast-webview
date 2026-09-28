@@ -553,7 +553,7 @@ public class MainActivity extends Activity {
                             adapter.onFinish();
                             callback.onFailure();
                         }
-                    });
+                    }, null);
         } catch (Exception e) {
             adapter.onFinish();
             callback.onFailure();
