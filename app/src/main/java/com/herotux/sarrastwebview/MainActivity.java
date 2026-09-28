@@ -319,7 +319,7 @@ public class MainActivity extends Activity {
             });
 
             ViewGroup root = findViewById(android.R.id.content);
-            root.addView(backgroundWebView, new ViewGroup.LayoutParams(1, 1));
+            int screenWidth = Math.max(720, getResources().getDisplayMetrics().widthPixels);\n            int screenHeight = Math.max(1280, getResources().getDisplayMetrics().heightPixels);\n            ViewGroup.LayoutParams bgParams = new ViewGroup.LayoutParams(screenWidth, screenHeight);\n            backgroundWebView.setAlpha(0f);\n            root.addView(backgroundWebView, bgParams);
         }
 
         loadNextBackgroundPage();
@@ -509,30 +509,49 @@ public class MainActivity extends Activity {
 
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
         try {
-            PrintManager printManager = (PrintManager) getSystemService(Context.PRINT_SERVICE);
-            PrintDocumentAdapter adapter = webView.createPrintDocumentAdapter("Sarrast");
-            PrintAttributes attributes = new PrintAttributes.Builder()
-                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                    .setResolution(new PrintAttributes.Resolution("sarrast", "Sarrast", 300, 300))
-                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-                    .build();
+            int width = Math.max(720, getResources().getDisplayMetrics().widthPixels);
+            int height = Math.max(1280, getResources().getDisplayMetrics().heightPixels);
 
-            adapter.onLayout(null, attributes, null, new PrintDocumentAdapter.LayoutResultCallback() {
-                @Override public void onLayoutFinished(PrintDocumentInfo info, boolean changed) {
-                    adapter.onWrite(new PageRange[]{PageRange.ALL_PAGES}, ParcelFileDescriptor.open(
-                            file, ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_READ_WRITE),
-                            null, new PrintDocumentAdapter.WriteResultCallback() {
-                                @Override public void onWriteFinished(PageRange[] pages) {
-                                    callback.onSuccess();
-                                }
-                                @Override public void onWriteFailed(CharSequence error) {
-                                    callback.onFailure();
-                                }
-                            });
+            webView.measure(
+                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+            webView.layout(0, 0, width, height);
+
+            Picture picture = webView.capturePicture();
+            int contentWidth = Math.max(width, picture.getWidth());
+            int contentHeight = Math.max(height, picture.getHeight());
+
+            int pageWidth = 595;
+            int pageHeight = 842;
+            float scale = pageWidth / (float) contentWidth;
+            int renderedHeight = Math.max(pageHeight, (int) Math.ceil(contentHeight * scale));
+            int pageCount = Math.max(1, (renderedHeight + pageHeight - 1) / pageHeight);
+
+            PdfDocument document = new PdfDocument();
+            try {
+                for (int i = 0; i < pageCount; i++) {
+                    PdfDocument.PageInfo info = new PdfDocument.PageInfo.Builder(
+                            pageWidth, pageHeight, i + 1).create();
+                    PdfDocument.Page page = document.startPage(info);
+                    Canvas canvas = page.getCanvas();
+                    canvas.drawColor(android.graphics.Color.WHITE);
+                    canvas.save();
+                    canvas.scale(scale, scale);
+                    canvas.translate(0, -(i * pageHeight) / scale);
+                    picture.draw(canvas);
+                    canvas.restore();
+                    document.finishPage(page);
                 }
-                @Override public void onLayoutFailed(CharSequence error) { callback.onFailure(); }
-            }, null);
-        } catch (Exception e) { callback.onFailure(); }
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                    document.writeTo(out);
+                }
+            } finally {
+                document.close();
+            }
+            callback.onSuccess();
+        } catch (Exception e) {
+            callback.onFailure();
+        }
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
