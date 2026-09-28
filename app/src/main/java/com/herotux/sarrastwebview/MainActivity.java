@@ -8,6 +8,10 @@ import android.content.ContentValues;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.Intent;
+import android.os.Build;
 import android.print.PrintAttributes;
 import android.print.PrintManager;
 import android.print.PrintDocumentAdapter;
@@ -29,13 +33,7 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 import android.widget.EditText;
 import android.text.InputType;
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
-import com.tom_roush.pdfbox.pdmodel.PDDocument;
-import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission;
-import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 
 public class MainActivity extends Activity {
     private static final String START_URL =
@@ -55,7 +53,7 @@ public class MainActivity extends Activity {
     private int downloadedCount = 0;
     private String batchFolderName = "صفحه";
     private Uri currentPdfUri;
-    private String batchPdfPassword;
+    private long batchEndTimeMillis = 0L;
 
     private static class LinkItem {
         final String title;
@@ -254,16 +252,15 @@ public class MainActivity extends Activity {
                 }
 
                 dialog.dismiss();
-                askForPdfPassword(password -> startBatchPdfDownload(selected, password));
+                showScheduleDialog(selected);
             });
         });
 
         dialog.show();
     }
 
-    private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected, String password) {
+    private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected) {
         downloadQueue = selected;
-        batchPdfPassword = password;
         CharSequence pageTitle = ((WebView) findViewById(R.id.webView)).getTitle();
         String sourceTitle = pageTitle == null ? "" : pageTitle.toString();
         if (TextUtils.isEmpty(sourceTitle)) {
@@ -322,6 +319,10 @@ public class MainActivity extends Activity {
 
     private void loadNextBackgroundPage() {
         if (downloadQueue == null || downloadIndex >= downloadQueue.size()) {
+            finishBatchPdfDownload();
+            return;
+        }
+        if (batchEndTimeMillis > 0 && System.currentTimeMillis() >= batchEndTimeMillis) {
             finishBatchPdfDownload();
             return;
         }
@@ -404,7 +405,7 @@ public class MainActivity extends Activity {
             writeAdapterToFile(adapter, attributes, tempFile, new PdfWriteCallback() {
                 @Override public void onSuccess() {
                     try {
-                        encryptPdfFile(tempFile, currentPdfUri, batchPdfPassword);
+                        copyFileToUri(tempFile, currentPdfUri);
                         if (android.os.Build.VERSION.SDK_INT >= 29) {
                             ContentValues done = new ContentValues();
                             done.put(MediaStore.Downloads.IS_PENDING, 0);
@@ -460,7 +461,6 @@ public class MainActivity extends Activity {
                 Toast.LENGTH_LONG).show();
 
         downloadQueue = null;
-        batchPdfPassword = null;
         downloadIndex = 0;
         downloadedCount = 0;
         batchFolderName = "صفحه";
@@ -482,7 +482,7 @@ public class MainActivity extends Activity {
         askForPdfPassword(password -> {
             if (pdfButton != null) pdfButton.setEnabled(false);
 
-            Toast.makeText(this, "در حال آماده‌سازی و رمزگذاری PDF…", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "در حال آماده‌سازی و PDF…", Toast.LENGTH_SHORT).show();
 
             String script =
                     "(async function() {" +
@@ -526,13 +526,13 @@ public class MainActivity extends Activity {
                                     MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                             if (uri == null) throw new IllegalStateException("Cannot create output file");
 
-                            encryptPdfFile(tempFile, uri, password);
+                            copyFileToUri(tempFile, uri);
 
                             ContentValues done = new ContentValues();
                             done.put(MediaStore.Downloads.IS_PENDING, 0);
                             getContentResolver().update(uri, done, null, null);
                             Toast.makeText(MainActivity.this,
-                                    "PDF رمزگذاری‌شده در Downloads/Sarrast ذخیره شد",
+                                    "PDF در Downloads/Sarrast ذخیره شد",
                                     Toast.LENGTH_LONG).show();
                         } catch (Exception ex) {
                             Toast.makeText(MainActivity.this,
@@ -605,9 +605,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void encryptPdfFile(File inputFile, Uri outputUri, String password) throws Exception {
-        PDFBoxResourceLoader.init(getApplicationContext());
-
+    private void OLD_encryptPdfFile(File inputFile, Uri outputUri, String password) throws Exception {
+        
         try (PDDocument document = PDDocument.load(inputFile);
              java.io.OutputStream output = getContentResolver().openOutputStream(outputUri, "w")) {
             if (output == null) throw new java.io.IOException("Cannot open output");
