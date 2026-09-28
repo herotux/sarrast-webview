@@ -11,13 +11,9 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
-import android.print.PrintAttributes;
-import android.print.PrintDocumentAdapter;
-import android.print.PrintDocumentInfo;
-import android.print.PageRange;
-import android.print.PrintManager;
-import android.os.CancellationSignal;
-import android.os.ParcelFileDescriptor;
+import android.graphics.Canvas;
+import android.graphics.Picture;
+import android.graphics.pdf.PdfDocument;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.view.View;
@@ -36,6 +32,7 @@ import android.widget.Toast;
 import java.io.File;
 
 public class MainActivity extends Activity {
+    static { WebView.enableSlowWholeDocumentDraw(); }
     private static final String START_URL =
             "https://www.sarrast.com/";
 
@@ -319,7 +316,11 @@ public class MainActivity extends Activity {
             });
 
             ViewGroup root = findViewById(android.R.id.content);
-            int screenWidth = Math.max(720, getResources().getDisplayMetrics().widthPixels);\n            int screenHeight = Math.max(1280, getResources().getDisplayMetrics().heightPixels);\n            ViewGroup.LayoutParams bgParams = new ViewGroup.LayoutParams(screenWidth, screenHeight);\n            backgroundWebView.setAlpha(0f);\n            root.addView(backgroundWebView, bgParams);
+            int screenWidth = Math.max(720, getResources().getDisplayMetrics().widthPixels);
+            int screenHeight = Math.max(1280, getResources().getDisplayMetrics().heightPixels);
+            ViewGroup.LayoutParams bgParams = new ViewGroup.LayoutParams(screenWidth, screenHeight);
+            backgroundWebView.setAlpha(0f);
+            root.addView(backgroundWebView, bgParams);
         }
 
         loadNextBackgroundPage();
@@ -344,7 +345,8 @@ public class MainActivity extends Activity {
                 "(async function() {" +
                 " const wait = ms => new Promise(r => setTimeout(r, ms));" +
                 " let lastHeight = 0, stable = 0;" +
-                " for (let i = 0; i < 60 && stable < 2; i++) {" +
+                " await wait(1200);" +
+                " for (let i = 0; i < 80 && stable < 3; i++) {" +
                 "   const h = Math.max(document.body.scrollHeight," +
                 "     document.documentElement.scrollHeight);" +
                 "   window.scrollTo(0, h);" +
@@ -355,7 +357,9 @@ public class MainActivity extends Activity {
                 "   lastHeight = nh;" +
                 " }" +
                 " window.scrollTo(0, 0);" +
-                " await wait(300);" +
+                " await wait(1000);" +
+                " while (!Array.from(document.images).every(i => i.complete)) { await wait(200); }" +
+                " await wait(500);" +
                 " return true;" +
                 "})()";
 
@@ -482,7 +486,7 @@ public class MainActivity extends Activity {
 
     private void startCurrentPagePdfExport(WebView webView) {
         Toast.makeText(this, "در حال آماده‌سازی PDF…", Toast.LENGTH_SHORT).show();
-        String script="(async function(){const w=ms=>new Promise(r=>setTimeout(r,ms));let last=0,stable=0;for(let i=0;i<80&&stable<3;i++){let h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.scrollTo(0,h);await w(120);let nh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);if(nh===last)stable++;else stable=0;last=nh;}window.scrollTo(0,0);await w(400);return true;})()";
+        String script="(async function(){const w=ms=>new Promise(r=>setTimeout(r,ms));await w(1200);let last=0,stable=0;for(let i=0;i<100&&stable<4;i++){let h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.scrollTo(0,h);await w(120);let nh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);if(nh===last)stable++;else stable=0;last=nh;}window.scrollTo(0,0);await w(1000);while(!Array.from(document.images).every(i=>i.complete)){await w(200);}await w(700);return true;})()";
         webView.evaluateJavascript(script,v -> {
             final String title = TextUtils.isEmpty(sanitizeFileName(webView.getTitle())) ? "Sarrast" : sanitizeFileName(webView.getTitle());
             File temp=new File(getCacheDir(),"sarrast_"+System.nanoTime()+".pdf");
@@ -510,16 +514,16 @@ public class MainActivity extends Activity {
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
         try {
             int width = Math.max(720, getResources().getDisplayMetrics().widthPixels);
-            int height = Math.max(1280, getResources().getDisplayMetrics().heightPixels);
+            int viewportHeight = Math.max(1280, getResources().getDisplayMetrics().heightPixels);
 
             webView.measure(
                     View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
-            webView.layout(0, 0, width, height);
+                    View.MeasureSpec.makeMeasureSpec(viewportHeight, View.MeasureSpec.EXACTLY));
+            webView.layout(0, 0, width, viewportHeight);
 
             Picture picture = webView.capturePicture();
             int contentWidth = Math.max(width, picture.getWidth());
-            int contentHeight = Math.max(height, picture.getHeight());
+            int contentHeight = Math.max(viewportHeight, picture.getHeight());
 
             int pageWidth = 595;
             int pageHeight = 842;
