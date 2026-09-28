@@ -155,44 +155,25 @@ public class MainActivity extends Activity {
     }
 
     private void chooseLinksForPdf(WebView webView) {
-        String script =
-                "(async function() {" +
-                " const wait = ms => new Promise(r => setTimeout(r, ms));" +
-                " let last = 0, stable = 0;" +
-                " for (let i = 0; i < 40 && stable < 2; i++) {" +
-                "   const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
-                "   window.scrollTo(0, h); await wait(100);" +
-                "   const nh = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
-                "   if (nh === last) stable++; else stable = 0; last = nh;" +
-                " }" +
-                " window.scrollTo(0, 0); await wait(250);" +
+        String script = buildLazyLoadScript(
+                "(function(){" +
                 " const seen = new Set(), out = [];" +
                 " document.querySelectorAll('a[href]').forEach(function(a) {" +
-                "   try {" +
-                "     const raw = a.getAttribute('href') || '';" +
-                "     const u = new URL(a.href, location.href);" +
-                "     let target = u;" +
-                "     if (u.hostname.toLowerCase() === 'ouo.io') {" +
-                "       const s = u.searchParams.get('s');" +
-                "       if (!s) return;" +
-                "       target = new URL(s, location.href);" +
-                "     }" +
-                "     const host = target.hostname.toLowerCase();" +
-                "     if ((target.protocol === 'http:' || target.protocol === 'https:') &&" +
-                "         (host === 'sarrast.com' || host.endsWith('.sarrast.com')) &&" +
-                "         !seen.has(target.href)) {" +
-                "       seen.add(target.href);" +
-                "       let t = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();" +
-                "       if (!t) t = target.pathname.split('/').filter(Boolean).pop() || target.pathname;" +
-                "       out.push({title:t, url:target.href});" +
+                "   try { const u = new URL(a.href, location.href); let target=u;" +
+                "     if (u.hostname.toLowerCase()==='ouo.io') { const s=u.searchParams.get('s'); if(!s)return; target=new URL(s,location.href); }" +
+                "     const host=target.hostname.toLowerCase();" +
+                "     if ((target.protocol==='http:'||target.protocol==='https:')&&(host==='sarrast.com'||host.endsWith('.sarrast.com'))&&!seen.has(target.href)) {" +
+                "       seen.add(target.href); let t=(a.innerText||a.textContent||'').replace(/\\s+/g,' ').trim();" +
+                "       if(!t)t=target.pathname.split('/').filter(Boolean).pop()||target.pathname; out.push({title:t,url:target.href});" +
                 "     }" +
                 "   } catch(e) {}" +
-                " });" +
-                " return JSON.stringify(out);" +
-                "})()";
+                " }); return JSON.stringify(out);" +
+                "})()");
         webView.evaluateJavascript(script, value -> {
             try {
-                JSONArray array = new JSONArray(value);
+                Object parsed = new org.json.JSONTokener(value).nextValue();
+                if (parsed instanceof String) parsed = new org.json.JSONTokener((String) parsed).nextValue();
+                JSONArray array = (JSONArray) parsed;
                 final java.util.ArrayList<LinkItem> links = new java.util.ArrayList<>();
                 for (int i = 0; i < array.length(); i++) {
                     org.json.JSONObject object = array.getJSONObject(i);
@@ -341,30 +322,7 @@ public class MainActivity extends Activity {
     }
 
     private void prepareBackgroundPageForPdf() {
-        String script =
-                "(async function() {" +
-                " const wait = ms => new Promise(r => setTimeout(r, ms));" +
-                " let lastHeight = 0, stable = 0;" +
-                " await wait(1200);" +
-                " for (let i = 0; i < 80 && stable < 3; i++) {" +
-                "   const h = Math.max(document.body.scrollHeight," +
-                "     document.documentElement.scrollHeight);" +
-                "   window.scrollTo(0, h);" +
-                "   await wait(120);" +
-                "   const nh = Math.max(document.body.scrollHeight," +
-                "     document.documentElement.scrollHeight);" +
-                "   if (nh === lastHeight) stable++; else stable = 0;" +
-                "   lastHeight = nh;" +
-                " }" +
-                " window.scrollTo(0, 0);" +
-                " await wait(1000);" +
-                " while (!Array.from(document.images).every(i => i.complete)) { await wait(200); }" +
-                " await wait(500);" +
-                " return true;" +
-                "})()";
-
-        backgroundWebView.evaluateJavascript(script,
-                value -> saveBackgroundPageAsPdf());
+        backgroundWebView.evaluateJavascript(buildLazyLoadScript("true"), value -> saveBackgroundPageAsPdf());
     }
 
     private void saveBackgroundPageAsPdf() {
@@ -485,25 +443,36 @@ public class MainActivity extends Activity {
     }
 
     private void startCurrentPagePdfExport(WebView webView) {
-        Toast.makeText(this, "در حال آماده‌سازی PDF…", Toast.LENGTH_SHORT).show();
-        String script="(async function(){const w=ms=>new Promise(r=>setTimeout(r,ms));await w(1200);let last=0,stable=0;for(let i=0;i<100&&stable<4;i++){let h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.scrollTo(0,h);await w(120);let nh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);if(nh===last)stable++;else stable=0;last=nh;}window.scrollTo(0,0);await w(1000);while(!Array.from(document.images).every(i=>i.complete)){await w(200);}await w(700);return true;})()";
-        webView.evaluateJavascript(script,v -> {
-            final String title = TextUtils.isEmpty(sanitizeFileName(webView.getTitle())) ? "Sarrast" : sanitizeFileName(webView.getTitle());
+        Toast.makeText(this, "در حال بارگذاری کامل تصاویر…", Toast.LENGTH_SHORT).show();
+        webView.evaluateJavascript(buildLazyLoadScript("true"), value -> {
+            final String rawTitle=webView.getTitle();
+            final String title=TextUtils.isEmpty(sanitizeFileName(rawTitle))?"Sarrast":sanitizeFileName(rawTitle);
             File temp=new File(getCacheDir(),"sarrast_"+System.nanoTime()+".pdf");
             writeWebViewToPdf(webView,temp,new PdfWriteCallback(){
-                public void onSuccess(){try{
-                    ContentValues cv=new ContentValues();
-                    cv.put(MediaStore.Downloads.DISPLAY_NAME,title+".pdf");
-                    cv.put(MediaStore.Downloads.MIME_TYPE,"application/pdf");
-                    if(Build.VERSION.SDK_INT>=29) cv.put(MediaStore.Downloads.RELATIVE_PATH,android.os.Environment.DIRECTORY_DOWNLOADS+"/Sarrast/");
-                    Uri u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);
-                    if(u==null) throw new Exception("output");
-                    copyFileToUri(temp,u); temp.delete();
-                    Toast.makeText(MainActivity.this,"PDF ذخیره شد",Toast.LENGTH_LONG).show();
-                }catch(Exception e){temp.delete();Toast.makeText(MainActivity.this,"خطا در ساخت PDF",Toast.LENGTH_SHORT).show();}}
+                public void onSuccess(){try{ContentValues cv=new ContentValues();cv.put(MediaStore.Downloads.DISPLAY_NAME,title+".pdf");cv.put(MediaStore.Downloads.MIME_TYPE,"application/pdf");if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Downloads.RELATIVE_PATH,android.os.Environment.DIRECTORY_DOWNLOADS+"/Sarrast/");Uri u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);if(u==null)throw new Exception("output");copyFileToUri(temp,u);temp.delete();Toast.makeText(MainActivity.this,"PDF ذخیره شد",Toast.LENGTH_LONG).show();}catch(Exception e){temp.delete();Toast.makeText(MainActivity.this,"خطا در ساخت PDF",Toast.LENGTH_SHORT).show();}}
                 public void onFailure(){temp.delete();Toast.makeText(MainActivity.this,"خطا در ساخت PDF",Toast.LENGTH_SHORT).show();}
             });
         });
+    }
+
+    /** Automatic lazy-load controller: scrolls the real page/container incrementally and waits for content/images. */
+    private String buildLazyLoadScript(String resultExpression) {
+        return "(async function(){"+
+                "const wait=ms=>new Promise(r=>setTimeout(r,ms));"+
+                "const raf=()=>new Promise(r=>requestAnimationFrame(()=>r()));"+
+                "const root=document.scrollingElement||document.documentElement;"+
+                "function candidates(){const a=[root];document.querySelectorAll('*').forEach(e=>{try{const s=getComputedStyle(e);if((s.overflowY==='auto'||s.overflowY==='scroll')&&e.scrollHeight>e.clientHeight+40)a.push(e);}catch(_){} });return a;}"+
+                "let sc=root;"+
+                "function pick(){return candidates().sort((a,b)=>(b.scrollHeight-b.clientHeight)-(a.scrollHeight-a.clientHeight))[0]||root;}"+
+                "function top(){return sc===root?(window.scrollY||root.scrollTop):sc.scrollTop;}"+
+                "function max(){return Math.max(0,sc.scrollHeight-(sc===root?window.innerHeight:sc.clientHeight));}"+
+                "function move(y){if(sc===root)window.scrollTo(0,y);else sc.scrollTop=y;sc.dispatchEvent(new Event('scroll',{bubbles:true}));}"+
+                "await wait(1200);let stable=0,lastH=-1,lastCount=-1,lastTop=-1;"+
+                "for(let round=0;round<180&&stable<5;round++){sc=pick();const step=Math.max(300,(sc===root?window.innerHeight:sc.clientHeight)*0.72);const target=Math.min(max(),top()+step);move(target);await raf();await wait(650);"+
+                "const imgs=Array.from(document.images);const near=imgs.filter(i=>{const r=i.getBoundingClientRect();return r.bottom>-600&&r.top<(window.innerHeight+900);});await Promise.all(near.map(i=>i.decode?i.decode().catch(()=>{}):Promise.resolve()));await wait(300);"+
+                "const h=sc.scrollHeight,count=document.images.length,cur=top(),atEnd=cur>=max()-8;"+
+                "if(h!==lastH||count!==lastCount)stable=0;else if(atEnd&&Math.abs(cur-lastTop)<8)stable++;else stable=0;lastH=h;lastCount=count;lastTop=cur;if(atEnd)await wait(900);}"+
+                "move(0);await wait(1200);const all=Array.from(document.images);await Promise.all(all.map(i=>i.decode?i.decode().catch(()=>{}):Promise.resolve()));await wait(700);return "+resultExpression+";})()";
     }
 
     private interface PdfWriteCallback {
@@ -512,50 +481,15 @@ public class MainActivity extends Activity {
     }
 
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
-        try {
-            int width = Math.max(720, getResources().getDisplayMetrics().widthPixels);
-            int viewportHeight = Math.max(1280, getResources().getDisplayMetrics().heightPixels);
-
-            webView.measure(
-                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(viewportHeight, View.MeasureSpec.EXACTLY));
-            webView.layout(0, 0, width, viewportHeight);
-
-            Picture picture = webView.capturePicture();
-            int contentWidth = Math.max(width, picture.getWidth());
-            int contentHeight = Math.max(viewportHeight, picture.getHeight());
-
-            int pageWidth = 595;
-            int pageHeight = 842;
-            float scale = pageWidth / (float) contentWidth;
-            int renderedHeight = Math.max(pageHeight, (int) Math.ceil(contentHeight * scale));
-            int pageCount = Math.max(1, (renderedHeight + pageHeight - 1) / pageHeight);
-
-            PdfDocument document = new PdfDocument();
-            try {
-                for (int i = 0; i < pageCount; i++) {
-                    PdfDocument.PageInfo info = new PdfDocument.PageInfo.Builder(
-                            pageWidth, pageHeight, i + 1).create();
-                    PdfDocument.Page page = document.startPage(info);
-                    Canvas canvas = page.getCanvas();
-                    canvas.drawColor(android.graphics.Color.WHITE);
-                    canvas.save();
-                    canvas.scale(scale, scale);
-                    canvas.translate(0, -(i * pageHeight) / scale);
-                    picture.draw(canvas);
-                    canvas.restore();
-                    document.finishPage(page);
-                }
-                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
-                    document.writeTo(out);
-                }
-            } finally {
-                document.close();
-            }
-            callback.onSuccess();
-        } catch (Exception e) {
-            callback.onFailure();
-        }
+        String sizeScript="(function(){return JSON.stringify({w:Math.max(document.documentElement.scrollWidth,document.body?document.body.scrollWidth:0),h:Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0)});})()";
+        webView.evaluateJavascript(sizeScript,value->{try{
+            Object parsed=new org.json.JSONTokener(value).nextValue();if(parsed instanceof String)parsed=new org.json.JSONTokener((String)parsed).nextValue();
+            org.json.JSONObject size=(org.json.JSONObject)parsed;int cssWidth=Math.max(1,size.optInt("w",webView.getWidth()));int cssHeight=Math.max(1,size.optInt("h",webView.getHeight()));
+            int width=Math.max(720,getResources().getDisplayMetrics().widthPixels);int renderHeight=Math.max(1280,cssHeight);
+            webView.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(renderHeight,View.MeasureSpec.EXACTLY));webView.layout(0,0,width,renderHeight);
+            int pageWidth=595,pageHeight=842;float scale=pageWidth/(float)Math.max(width,cssWidth);int renderedHeight=Math.max(pageHeight,(int)Math.ceil(renderHeight*scale));int pageCount=Math.max(1,(renderedHeight+pageHeight-1)/pageHeight);
+            PdfDocument document=new PdfDocument();try{for(int i=0;i<pageCount;i++){PdfDocument.PageInfo info=new PdfDocument.PageInfo.Builder(pageWidth,pageHeight,i+1).create();PdfDocument.Page page=document.startPage(info);Canvas canvas=page.getCanvas();canvas.drawColor(android.graphics.Color.WHITE);canvas.save();canvas.scale(scale,scale);canvas.translate(0,-(i*pageHeight)/scale);webView.draw(canvas);canvas.restore();document.finishPage(page);}try(java.io.FileOutputStream out=new java.io.FileOutputStream(file)){document.writeTo(out);}}finally{document.close();}callback.onSuccess();
+        }catch(Exception e){callback.onFailure();}});
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
