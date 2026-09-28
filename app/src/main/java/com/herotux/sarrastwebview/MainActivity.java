@@ -13,6 +13,8 @@ import android.content.Intent;
 import android.os.Build;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
+import android.print.PrintDocumentInfo;
+import android.print.PageRange;
 import android.print.PrintManager;
 import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
