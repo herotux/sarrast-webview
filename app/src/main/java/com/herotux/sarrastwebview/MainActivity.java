@@ -159,54 +159,61 @@ public class MainActivity extends Activity {
 
     private void chooseLinksForPdf(WebView webView) {
         String script =
-                "(function() {" +
-                " const seen = new Set();" +
-                " const out = [];" +
+                "(async function() {" +
+                " const wait = ms => new Promise(r => setTimeout(r, ms));" +
+                " let last = 0, stable = 0;" +
+                " for (let i = 0; i < 40 && stable < 2; i++) {" +
+                "   const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
+                "   window.scrollTo(0, h); await wait(100);" +
+                "   const nh = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
+                "   if (nh === last) stable++; else stable = 0; last = nh;" +
+                " }" +
+                " window.scrollTo(0, 0); await wait(250);" +
+                " const seen = new Set(), out = [];" +
                 " document.querySelectorAll('a[href]').forEach(function(a) {" +
                 "   try {" +
+                "     const raw = a.getAttribute('href') || '';" +
                 "     const u = new URL(a.href, location.href);" +
-                "     if ((u.protocol === 'http:' || u.protocol === 'https:') &&" +
-                "         (u.hostname === 'sarrast.com' || u.hostname.endsWith('.sarrast.com')) &&" +
-                "         !seen.has(u.href)) {" +
-                "       seen.add(u.href);" +
-                "       const t = (a.innerText || a.textContent || u.pathname)" +
-                "           .replace(/\\s+/g, ' ').trim();" +
-                "       out.push({title: t || u.pathname, url: u.href});" +
+                "     let target = u;" +
+                "     if (u.hostname.toLowerCase() === 'ouo.io') {" +
+                "       const s = u.searchParams.get('s');" +
+                "       if (!s) return;" +
+                "       target = new URL(s, location.href);" +
                 "     }" +
-                "   } catch (e) {}" +
+                "     const host = target.hostname.toLowerCase();" +
+                "     if ((target.protocol === 'http:' || target.protocol === 'https:') &&" +
+                "         (host === 'sarrast.com' || host.endsWith('.sarrast.com')) &&" +
+                "         !seen.has(target.href)) {" +
+                "       seen.add(target.href);" +
+                "       let t = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();" +
+                "       if (!t) t = target.pathname.split('/').filter(Boolean).pop() || target.pathname;" +
+                "       out.push({title:t, url:target.href});" +
+                "     }" +
+                "   } catch(e) {}" +
                 " });" +
                 " return JSON.stringify(out);" +
                 "})()";
-
         webView.evaluateJavascript(script, value -> {
             try {
                 JSONArray array = new JSONArray(value);
                 final java.util.ArrayList<LinkItem> links = new java.util.ArrayList<>();
-
                 for (int i = 0; i < array.length(); i++) {
                     org.json.JSONObject object = array.getJSONObject(i);
                     String url = object.optString("url", "");
                     String title = object.optString("title", url);
-
                     if (isAllowedTarget(Uri.parse(url))) {
                         links.add(new LinkItem(
-                                title.length() > 100
-                                        ? title.substring(0, 100)
-                                        : title,
+                                title.length() > 120 ? title.substring(0, 120) : title,
                                 url));
                     }
                 }
-
                 if (links.isEmpty()) {
-                    Toast.makeText(this, "لینکی برای ذخیره پیدا نشد",
-                            Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "لینک قسمت‌ها در صفحه پیدا نشد", Toast.LENGTH_LONG).show();
                     return;
                 }
-
                 showLinkSelectionDialog(links);
             } catch (Exception e) {
-                Toast.makeText(this, "خطا در خواندن لینک‌های صفحه",
-                        Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "خطا در خواندن لینک‌های صفحه", Toast.LENGTH_SHORT).show();
             }
         });
     }
