@@ -7,14 +7,12 @@ import android.content.SharedPreferences;
 import android.content.ContentValues;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.CancellationSignal;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
-import android.print.PrintAttributes;
-import android.print.PrintManager;
-import android.print.PrintDocumentAdapter;
+import android.graphics.Canvas;
+import android.graphics.pdf.PdfDocument;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.view.View;
@@ -489,11 +487,7 @@ public class MainActivity extends Activity {
             String title=sanitizeFileName(webView.getTitle());
             if(TextUtils.isEmpty(title)) title="Sarrast";
             File temp=new File(getCacheDir(),"sarrast_"+System.nanoTime()+".pdf");
-            PrintDocumentAdapter adapter=webView.createPrintDocumentAdapter(title);
-            PrintAttributes attrs=new PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                    .setResolution(new PrintAttributes.Resolution("sarrast","PDF",300,300))
-                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS).build();
-            writeAdapterToFile(adapter,attrs,temp,new PdfWriteCallback(){
+            writeWebViewToPdf(webView,temp,new PdfWriteCallback(){
                 public void onSuccess(){try{
                     ContentValues cv=new ContentValues();
                     cv.put(MediaStore.Downloads.DISPLAY_NAME,title+".pdf");
@@ -514,48 +508,39 @@ public class MainActivity extends Activity {
         void onFailure();
     }
 
-    private void writeAdapterToFile(PrintDocumentAdapter adapter,
-                                    PrintAttributes attributes,
-                                    File file,
-                                    PdfWriteCallback callback) {
+    private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
         try {
-            android.os.ParcelFileDescriptor pfd =
-                    android.os.ParcelFileDescriptor.open(file,
-                            android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
-                                    | android.os.ParcelFileDescriptor.MODE_CREATE
-                                    | android.os.ParcelFileDescriptor.MODE_TRUNCATE);
+            int pageWidth = 595;
+            int pageHeight = 842;
+            int contentWidth = Math.max(1, webView.getWidth());
+            int contentHeight = Math.max(webView.getContentHeight() * Math.max(1, (int) webView.getScale()), webView.getHeight());
+            if (contentHeight <= 0) contentHeight = webView.getHeight();
 
-            adapter.onLayout(null, attributes, new CancellationSignal(),
-                    new PrintDocumentAdapter.LayoutResultCallback() {
-                        @Override public void onLayoutFinished(
-                                android.print.PrintDocumentInfo info, boolean changed) {
-                            adapter.onWrite(
-                                    new android.print.PageRange[]{android.print.PageRange.ALL_PAGES},
-                                    pfd, new CancellationSignal(),
-                                    new PrintDocumentAdapter.WriteResultCallback() {
-                                        @Override public void onWriteFinished(
-                                                android.print.PageRange[] pages) {
-                                            try { pfd.close(); } catch (Exception ignored) {}
-                                            adapter.onFinish();
-                                            callback.onSuccess();
-                                        }
+            float scale = pageWidth / (float) contentWidth;
+            int renderedHeight = Math.max(pageHeight, (int) Math.ceil(contentHeight * scale));
+            int pageCount = Math.max(1, (renderedHeight + pageHeight - 1) / pageHeight);
 
-                                        @Override public void onWriteFailed(CharSequence error) {
-                                            try { pfd.close(); } catch (Exception ignored) {}
-                                            adapter.onFinish();
-                                            callback.onFailure();
-                                        }
-                                    });
-                        }
-
-                        @Override public void onLayoutFailed(CharSequence error) {
-                            try { pfd.close(); } catch (Exception ignored) {}
-                            adapter.onFinish();
-                            callback.onFailure();
-                        }
-                    }, null);
+            PdfDocument document = new PdfDocument();
+            try {
+                for (int i = 0; i < pageCount; i++) {
+                    PdfDocument.PageInfo info = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, i + 1).create();
+                    PdfDocument.Page page = document.startPage(info);
+                    Canvas canvas = page.getCanvas();
+                    canvas.save();
+                    canvas.scale(scale, scale);
+                    canvas.translate(0, -(i * pageHeight) / scale);
+                    webView.draw(canvas);
+                    canvas.restore();
+                    document.finishPage(page);
+                }
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                    document.writeTo(out);
+                }
+            } finally {
+                document.close();
+            }
+            callback.onSuccess();
         } catch (Exception e) {
-            adapter.onFinish();
             callback.onFailure();
         }
     }
@@ -700,6 +685,7 @@ public class MainActivity extends Activity {
 
         pdfButton.setOnClickListener(v -> exportCurrentPageToPdf(webView));
         linksPdfButton.setOnClickListener(v -> chooseLinksForPdf(webView));
+        downloadsButton = findViewById(R.id.downloadsButton);
         downloadsButton.setOnClickListener(v -> openDownloads());
 
         webView.getSettings().setJavaScriptEnabled(true);
