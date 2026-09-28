@@ -22,7 +22,6 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.view.ViewGroup;
-import android.net.Uri;
 import org.json.JSONArray;
 import android.widget.Button;
 import android.widget.ArrayAdapter;
@@ -388,18 +387,7 @@ public class MainActivity extends Activity {
             }
 
             File tempFile = new File(getCacheDir(), "sarrast_batch_" + System.nanoTime() + ".pdf");
-            String jobName = title;
-            PrintDocumentAdapter adapter =
-                    backgroundWebView.createPrintDocumentAdapter(jobName);
-
-            PrintAttributes attributes = new PrintAttributes.Builder()
-                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                    .setResolution(new PrintAttributes.Resolution(
-                            "sarrast_batch", "PDF", 300, 300))
-                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-                    .build();
-
-            writeAdapterToFile(adapter, attributes, tempFile, new PdfWriteCallback() {
+            writeWebViewToPdf(backgroundWebView, tempFile, new PdfWriteCallback() {
                 @Override public void onSuccess() {
                     try {
                         copyFileToUri(tempFile, currentPdfUri);
