@@ -427,7 +427,6 @@ public class MainActivity extends Activity {
                     skipCurrentDownload();
                 }
             });
-            });
         } catch (Exception e) {
             deleteCurrentPdf();
             skipCurrentDownload();
@@ -499,8 +498,9 @@ public class MainActivity extends Activity {
                     "})()";
 
             webView.evaluateJavascript(script, value -> {
-                String title = sanitizeFileName(webView.getTitle());
-                if (TextUtils.isEmpty(title)) title = "Sarrast";
+                String outputTitle = sanitizeFileName(webView.getTitle());
+                if (TextUtils.isEmpty(outputTitle)) outputTitle = "Sarrast";
+                final String title = outputTitle;
                 File tempFile = new File(getCacheDir(), "sarrast_current_" + System.nanoTime() + ".pdf");
 
                 PrintDocumentAdapter adapter = webView.createPrintDocumentAdapter(title);
@@ -630,7 +630,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void askForPdfPassword(java.util.function.Consumer<String> onPassword) {
+    private interface PasswordCallback {
+        void onPassword(String password);
+    }
+
+    private void askForPdfPassword(PasswordCallback onPassword) {
         final EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
