@@ -11,8 +11,8 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Picture;
 import android.graphics.pdf.PdfDocument;
 import android.provider.MediaStore;
 import android.text.TextUtils;
@@ -472,7 +472,7 @@ public class MainActivity extends Activity {
                 "const imgs=Array.from(document.images);const near=imgs.filter(i=>{const r=i.getBoundingClientRect();return r.bottom>-600&&r.top<(window.innerHeight+900);});await Promise.all(near.map(i=>i.decode?i.decode().catch(()=>{}):Promise.resolve()));await wait(300);"+
                 "const h=sc.scrollHeight,count=document.images.length,cur=top(),atEnd=cur>=max()-8;"+
                 "if(h!==lastH||count!==lastCount)stable=0;else if(atEnd&&Math.abs(cur-lastTop)<8)stable++;else stable=0;lastH=h;lastCount=count;lastTop=cur;if(atEnd)await wait(900);}"+
-                "move(0);await wait(1200);const all=Array.from(document.images);await Promise.all(all.map(i=>i.decode?i.decode().catch(()=>{}):Promise.resolve()));await wait(700);return "+resultExpression+";})()";
+                "window.__sarrastScroller=sc;"+                "move(0);await wait(1200);const all=Array.from(document.images);await Promise.all(all.map(i=>i.decode?i.decode().catch(()=>{}):Promise.resolve()));await wait(700);return "+resultExpression+";})()";
     }
 
     private interface PdfWriteCallback {
@@ -481,15 +481,85 @@ public class MainActivity extends Activity {
     }
 
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
-        String sizeScript="(function(){return JSON.stringify({w:Math.max(document.documentElement.scrollWidth,document.body?document.body.scrollWidth:0),h:Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0)});})()";
-        webView.evaluateJavascript(sizeScript,value->{try{
-            Object parsed=new org.json.JSONTokener(value).nextValue();if(parsed instanceof String)parsed=new org.json.JSONTokener((String)parsed).nextValue();
-            org.json.JSONObject size=(org.json.JSONObject)parsed;int cssWidth=Math.max(1,size.optInt("w",webView.getWidth()));int cssHeight=Math.max(1,size.optInt("h",webView.getHeight()));
-            int width=Math.max(720,getResources().getDisplayMetrics().widthPixels);int renderHeight=Math.max(1280,cssHeight);
-            webView.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(renderHeight,View.MeasureSpec.EXACTLY));webView.layout(0,0,width,renderHeight);
-            int pageWidth=595,pageHeight=842;float scale=pageWidth/(float)Math.max(width,cssWidth);int renderedHeight=Math.max(pageHeight,(int)Math.ceil(renderHeight*scale));int pageCount=Math.max(1,(renderedHeight+pageHeight-1)/pageHeight);
-            PdfDocument document=new PdfDocument();try{for(int i=0;i<pageCount;i++){PdfDocument.PageInfo info=new PdfDocument.PageInfo.Builder(pageWidth,pageHeight,i+1).create();PdfDocument.Page page=document.startPage(info);Canvas canvas=page.getCanvas();canvas.drawColor(android.graphics.Color.WHITE);canvas.save();canvas.scale(scale,scale);canvas.translate(0,-(i*pageHeight)/scale);webView.draw(canvas);canvas.restore();document.finishPage(page);}try(java.io.FileOutputStream out=new java.io.FileOutputStream(file)){document.writeTo(out);}}finally{document.close();}callback.onSuccess();
-        }catch(Exception e){callback.onFailure();}});
+        // Capture the already lazy-loaded page viewport-by-viewport. This is important:
+        // WebView cannot reliably paint an arbitrarily tall document in one View.draw() call.
+        String metricsScript =
+                "(function(){var e=window.__sarrastScroller||document.scrollingElement||document.documentElement;" +
+                "var root=e===document.scrollingElement||e===document.documentElement;" +
+                "return JSON.stringify({w:window.innerWidth,h:window.innerHeight,max:Math.max(0,e.scrollHeight-(root?window.innerHeight:e.clientHeight)),root:root});})()";
+
+        webView.evaluateJavascript(metricsScript, value -> {
+            try {
+                Object parsed = new org.json.JSONTokener(value).nextValue();
+                if (parsed instanceof String) parsed = new org.json.JSONTokener((String) parsed).nextValue();
+                org.json.JSONObject m = (org.json.JSONObject) parsed;
+                final int viewWidth = Math.max(1, webView.getWidth() > 0 ? webView.getWidth() : getResources().getDisplayMetrics().widthPixels);
+                final int viewHeight = Math.max(1, m.optInt("h", webView.getHeight()));
+                final int maxScroll = Math.max(0, m.optInt("max", 0));
+                final int pageWidth = 595;
+                final int pageHeight = 842;
+
+                webView.measure(
+                        View.MeasureSpec.makeMeasureSpec(viewWidth, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(viewHeight, View.MeasureSpec.EXACTLY));
+                webView.layout(0, 0, viewWidth, viewHeight);
+
+                final PdfDocument document = new PdfDocument();
+                final int[] pageNumber = {0};
+                final int step = Math.max(1, viewHeight - 40);
+
+                class CaptureNext {
+                    void run(int scrollY) {
+                        String scrollScript =
+                                "(function(){var e=window.__sarrastScroller||document.scrollingElement||document.documentElement;" +
+                                "var root=e===document.scrollingElement||e===document.documentElement;" +
+                                "if(root) window.scrollTo(0," + scrollY + "); else e.scrollTop=" + scrollY + ";" +
+                                "e.dispatchEvent(new Event('scroll',{bubbles:true}));return true;})()";
+                        webView.evaluateJavascript(scrollScript, ignored ->
+                                webView.postDelayed(() -> {
+                                    try {
+                                        Bitmap bitmap = Bitmap.createBitmap(viewWidth, viewHeight, Bitmap.Config.ARGB_8888);
+                                        Canvas captureCanvas = new Canvas(bitmap);
+                                        webView.draw(captureCanvas);
+
+                                        PdfDocument.PageInfo info = new PdfDocument.PageInfo.Builder(
+                                                pageWidth, pageHeight, ++pageNumber[0]).create();
+                                        PdfDocument.Page page = document.startPage(info);
+                                        Canvas pdfCanvas = page.getCanvas();
+                                        pdfCanvas.drawColor(android.graphics.Color.WHITE);
+                                        float scale = pageWidth / (float) viewWidth;
+                                        pdfCanvas.save();
+                                        pdfCanvas.scale(scale, scale);
+                                        pdfCanvas.drawBitmap(bitmap, 0, 0, null);
+                                        pdfCanvas.restore();
+                                        document.finishPage(page);
+                                        bitmap.recycle();
+
+                                        if (scrollY >= maxScroll) {
+                                            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                                                document.writeTo(out);
+                                            }
+                                            document.close();
+                                            webView.evaluateJavascript(
+                                                    "(function(){var e=window.__sarrastScroller||document.scrollingElement||document.documentElement;" +
+                                                    "var root=e===document.scrollingElement||e===document.documentElement;" +
+                                                    "if(root)window.scrollTo(0,0);else e.scrollTop=0;return true;})()",
+                                                    ignored2 -> callback.onSuccess());
+                                        } else {
+                                            run(Math.min(maxScroll, scrollY + step));
+                                        }
+                                    } catch (Exception e) {
+                                        try { document.close(); } catch (Exception ignored2) {}
+                                        callback.onFailure();
+                                    }
+                                }, 450));
+                    }
+                }
+                new CaptureNext().run(0);
+            } catch (Exception e) {
+                callback.onFailure();
+            }
+        });
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
