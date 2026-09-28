@@ -264,8 +264,8 @@ public class MainActivity extends Activity {
     private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected, String password) {
         downloadQueue = selected;
         batchPdfPassword = password;
-        String sourceTitle = findViewById(R.id.webView) instanceof WebView
-                ? ((WebView) findViewById(R.id.webView)).getTitle() : getTitle();
+        CharSequence pageTitle = ((WebView) findViewById(R.id.webView)).getTitle();
+        String sourceTitle = pageTitle == null ? "" : pageTitle.toString();
         if (TextUtils.isEmpty(sourceTitle)) {
             sourceTitle = "صفحه";
         }
@@ -564,14 +564,13 @@ public class MainActivity extends Activity {
                                     File file,
                                     PdfWriteCallback callback) {
         try {
-            FileOutputStream output = new FileOutputStream(file);
             android.os.ParcelFileDescriptor pfd =
                     android.os.ParcelFileDescriptor.open(file,
                             android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
                                     | android.os.ParcelFileDescriptor.MODE_CREATE
                                     | android.os.ParcelFileDescriptor.MODE_TRUNCATE);
 
-            adapter.onLayout(null, attributes, attributes, new CancellationSignal(),
+            adapter.onLayout(null, attributes, new CancellationSignal(),
                     new PrintDocumentAdapter.LayoutResultCallback() {
                         @Override public void onLayoutFinished(
                                 android.print.PrintDocumentInfo info, boolean changed) {
@@ -582,14 +581,12 @@ public class MainActivity extends Activity {
                                         @Override public void onWriteFinished(
                                                 android.print.PageRange[] pages) {
                                             try { pfd.close(); } catch (Exception ignored) {}
-                                            try { output.close(); } catch (Exception ignored) {}
                                             adapter.onFinish();
                                             callback.onSuccess();
                                         }
 
                                         @Override public void onWriteFailed(CharSequence error) {
                                             try { pfd.close(); } catch (Exception ignored) {}
-                                            try { output.close(); } catch (Exception ignored) {}
                                             adapter.onFinish();
                                             callback.onFailure();
                                         }
@@ -598,7 +595,6 @@ public class MainActivity extends Activity {
 
                         @Override public void onLayoutFailed(CharSequence error) {
                             try { pfd.close(); } catch (Exception ignored) {}
-                            try { output.close(); } catch (Exception ignored) {}
                             adapter.onFinish();
                             callback.onFailure();
                         }
@@ -661,7 +657,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 dialog.dismiss();
-                onPassword.accept(password);
+                onPassword.onPassword(password);
             });
         });
         dialog.show();
