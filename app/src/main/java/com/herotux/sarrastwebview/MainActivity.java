@@ -605,61 +605,121 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void OLD_encryptPdfFile(File inputFile, Uri outputUri, String password) throws Exception {
-        
-        try (PDDocument document = PDDocument.load(inputFile);
+    private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
+        try (java.io.InputStream input = new java.io.FileInputStream(inputFile);
              java.io.OutputStream output = getContentResolver().openOutputStream(outputUri, "w")) {
             if (output == null) throw new java.io.IOException("Cannot open output");
-
-            AccessPermission permissions = new AccessPermission();
-            permissions.setCanPrint(true);
-            permissions.setCanModify(false);
-            permissions.setCanExtractContent(false);
-            permissions.setCanModifyAnnotations(false);
-
-            StandardProtectionPolicy policy =
-                    new StandardProtectionPolicy(password, password, permissions);
-            policy.setEncryptionKeyLength(128);
-            document.protect(policy);
-            document.save(output);
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.flush();
         }
     }
 
-    private interface PasswordCallback {
-        void onPassword(String password);
+    private void showScheduleDialog(java.util.ArrayList<LinkItem> selected) {
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int)(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, 0, pad, 0);
+
+        final android.widget.Button start = new android.widget.Button(this);
+        final android.widget.Button end = new android.widget.Button(this);
+        final long[] times = {System.currentTimeMillis() + 60000L, System.currentTimeMillis() + 3600000L};
+        java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault());
+        start.setText("شروع: " + fmt.format(new java.util.Date(times[0])));
+        end.setText("پایان: " + fmt.format(new java.util.Date(times[1])));
+        box.addView(start);
+        box.addView(end);
+
+        android.view.View.OnClickListener picker = v -> {
+            int index = v == start ? 0 : 1;
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            cal.setTimeInMillis(times[index]);
+            new android.app.DatePickerDialog(this, (d, y, m, day) -> {
+                cal.set(y, m, day);
+                new android.app.TimePickerDialog(this, (t, h, min) -> {
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, h);
+                    cal.set(java.util.Calendar.MINUTE, min);
+                    cal.set(java.util.Calendar.SECOND, 0);
+                    times[index] = cal.getTimeInMillis();
+                    ((android.widget.Button)v).setText((index == 0 ? "شروع: " : "پایان: ") + fmt.format(cal.getTime()));
+                }, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE), true).show();
+            }, cal.get(java.util.Calendar.YEAR), cal.get(java.util.Calendar.MONTH), cal.get(java.util.Calendar.DAY_OF_MONTH)).show();
+        };
+        start.setOnClickListener(picker);
+        end.setOnClickListener(picker);
+
+        new AlertDialog.Builder(this)
+                .setTitle("زمان‌بندی دانلود")
+                .setMessage(selected.size() + " قسمت انتخاب شده")
+                .setView(box)
+                .setNegativeButton("لغو", null)
+                .setPositiveButton("زمان‌بندی", (d, w) -> scheduleDownload(selected, times[0], times[1]))
+                .show();
     }
 
-    private void askForPdfPassword(PasswordCallback onPassword) {
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        input.setHint("حداقل ۴ کاراکتر");
+    private void scheduleDownload(java.util.ArrayList<LinkItem> selected, long start, long end) {
+        if (end <= start) {
+            Toast.makeText(this, "زمان پایان باید بعد از شروع باشد", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            JSONArray array = new JSONArray();
+            for (LinkItem item : selected) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("title", item.title);
+                o.put("url", item.url);
+                array.put(o);
+            }
+            preferences.edit()
+                    .putString("scheduled_queue", array.toString())
+                    .putLong("scheduled_start", start)
+                    .putLong("scheduled_end", end)
+                    .apply();
 
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
-        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
-        container.setPadding(pad, 0, pad, 0);
-        container.addView(input);
+            Intent intent = new Intent(this, DownloadAlarmReceiver.class);
+            intent.setAction("SARRAST_START_DOWNLOAD");
+            PendingIntent pi = PendingIntent.getBroadcast(this, 77, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            AlarmManager alarm = (AlarmManager)getSystemService(ALARM_SERVICE);
+            if (Build.VERSION.SDK_INT >= 23) {
+                alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, start, pi);
+            } else {
+                alarm.setExact(AlarmManager.RTC_WAKEUP, start, pi);
+            }
+            Toast.makeText(this, "زمان‌بندی ذخیره شد", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در زمان‌بندی", Toast.LENGTH_SHORT).show();
+        }
+    }
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("رمز PDF")
-                .setMessage("این رمز برای باز کردن فایل PDF استفاده می‌شود.")
-                .setView(container)
-                .setNegativeButton("لغو", null)
-                .setPositiveButton("ادامه", null)
-                .create();
-
-        dialog.setOnShowListener(d -> {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                String password = input.getText().toString();
-                if (password.length() < 4) {
-                    input.setError("رمز باید حداقل ۴ کاراکتر باشد");
-                    return;
+    private void openDownloads() {
+        java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        String[] projection = {MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME};
+        try (android.database.Cursor cursor = getContentResolver().query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection, null, null,
+                MediaStore.Downloads.DATE_ADDED + " DESC")) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME));
+                    if (name != null && name.toLowerCase().endsWith(".pdf")) {
+                        long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID));
+                        uris.add(Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, String.valueOf(id)));
+                        names.add(name);
+                    }
                 }
-                dialog.dismiss();
-                onPassword.onPassword(password);
-            });
-        });
-        dialog.show();
+            }
+        } catch (Exception ignored) {}
+        if (names.isEmpty()) {
+            Toast.makeText(this, "PDF دانلودشده‌ای پیدا نشد", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("PDFهای دانلودشده")
+                .setItems(names.toArray(new String[0]),
+                        (d, which) -> startActivity(new Intent(this, PdfViewerActivity.class).setData(uris.get(which))))
+                .show();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
