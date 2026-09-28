@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private java.util.ArrayList<LinkItem> downloadQueue;
     private int downloadIndex = 0;
     private int downloadedCount = 0;
+    private String batchFolderName = "صفحه";
     private Uri currentPdfUri;
 
     private static class LinkItem {
@@ -252,6 +253,14 @@ public class MainActivity extends Activity {
 
     private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected) {
         downloadQueue = selected;
+        String sourceTitle = getTitle();
+        if (TextUtils.isEmpty(sourceTitle)) {
+            sourceTitle = "صفحه";
+        }
+        batchFolderName = sanitizeFileName(sourceTitle);
+        if (TextUtils.isEmpty(batchFolderName)) {
+            batchFolderName = "صفحه";
+        }
         downloadIndex = 0;
         downloadedCount = 0;
 
@@ -356,7 +365,8 @@ public class MainActivity extends Activity {
 
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             values.put(MediaStore.Downloads.RELATIVE_PATH,
-                    android.os.Environment.DIRECTORY_DOWNLOADS + "/Sarrast");
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                            + "/Sarrast/" + batchFolderName + "/");
             values.put(MediaStore.Downloads.IS_PENDING, 1);
         }
 
@@ -493,6 +503,7 @@ public class MainActivity extends Activity {
         downloadQueue = null;
         downloadIndex = 0;
         downloadedCount = 0;
+        batchFolderName = "صفحه";
     }
 
     private String sanitizeFileName(String name) {
