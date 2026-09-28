@@ -515,4 +515,384 @@ public class MainActivity extends Activity {
                 "return "+resultExpression+";})()";
     }
 
+    private interface PdfWriteCallback {
+        void onSuccess();
+        void onFailure();
+    }
+
+    private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
+        webView.evaluateJavascript(
+                "(function(){var e=window.__sarrastScroller||document.scrollingElement||document.documentElement;" +
+                "var root=e===document.scrollingElement||e===document.documentElement;" +
+                "return JSON.stringify({w:window.innerWidth,h:window.innerHeight," +
+                "max:Math.max(0,e.scrollHeight-(root?window.innerHeight:e.clientHeight)),root:root});})()",
+                value -> {
+                    try {
+                        Object parsed = new org.json.JSONTokener(value).nextValue();
+                        if (parsed instanceof String) {
+                            parsed = new org.json.JSONTokener((String) parsed).nextValue();
+                        }
+                        org.json.JSONObject metrics = (org.json.JSONObject) parsed;
+
+                        final int viewWidth = Math.max(1, metrics.optInt(
+                                "w", getResources().getDisplayMetrics().widthPixels));
+                        final int viewHeight = Math.max(1, metrics.optInt(
+                                "h", getResources().getDisplayMetrics().heightPixels));
+                        final int maxScroll = Math.max(0, metrics.optInt("max", 0));
+                        final boolean rootScroller = metrics.optBoolean("root", true);
+
+                        webView.measure(
+                                View.MeasureSpec.makeMeasureSpec(viewWidth, View.MeasureSpec.EXACTLY),
+                                View.MeasureSpec.makeMeasureSpec(viewHeight, View.MeasureSpec.EXACTLY));
+                        webView.layout(0, 0, viewWidth, viewHeight);
+
+                        final PdfDocument document = new PdfDocument();
+                        final int pageWidth = 595;
+                        final int pageHeight = 842;
+                        final int step = Math.max(1, viewHeight - 40);
+
+                        class Capture {
+                            int scrollY = 0;
+                            void next() {
+                                if (scrollY > maxScroll) {
+                                    finish();
+                                    return;
+                                }
+
+                                final int current = scrollY;
+                                String script;
+                                if (rootScroller) {
+                                    script = "window.scrollTo(0," + current + ");" +
+                                            "void(window.__sarrastScroller=document.scrollingElement||document.documentElement);";
+                                } else {
+                                    script = "(function(){var e=window.__sarrastScroller;" +
+                                            "if(e)e.scrollTop=" + current + ";})()";
+                                }
+
+                                webView.evaluateJavascript(script, ignored ->
+                                        webView.postDelayed(() -> {
+                                            try {
+                                                Bitmap bitmap = Bitmap.createBitmap(
+                                                        viewWidth, viewHeight, Bitmap.Config.ARGB_8888);
+                                                Canvas captureCanvas = new Canvas(bitmap);
+                                                webView.draw(captureCanvas);
+
+                                                PdfDocument.PageInfo info =
+                                                        new PdfDocument.PageInfo.Builder(
+                                                                pageWidth, pageHeight,
+                                                                document.getPages().size() + 1).create();
+                                                PdfDocument.Page page = document.startPage(info);
+                                                Canvas pdfCanvas = page.getCanvas();
+                                                pdfCanvas.drawColor(android.graphics.Color.WHITE);
+                                                pdfCanvas.save();
+                                                float scale = pageWidth / (float) viewWidth;
+                                                pdfCanvas.scale(scale, scale);
+                                                pdfCanvas.drawBitmap(bitmap, 0, 0, null);
+                                                pdfCanvas.restore();
+                                                document.finishPage(page);
+                                                bitmap.recycle();
+
+                                                if (current >= maxScroll) {
+                                                    finish();
+                                                } else {
+                                                    scrollY = Math.min(maxScroll, current + step);
+                                                    next();
+                                                }
+                                            } catch (Exception e) {
+                                                document.close();
+                                                callback.onFailure();
+                                            }
+                                        }, 450));
+                            }
+
+                            void finish() {
+                                try (java.io.FileOutputStream out =
+                                             new java.io.FileOutputStream(file)) {
+                                    document.writeTo(out);
+                                    document.close();
+                                    callback.onSuccess();
+                                } catch (Exception e) {
+                                    try { document.close(); } catch (Exception ignored) {}
+                                    callback.onFailure();
+                                }
+                            }
+                        }
+
+                        new Capture().next();
+                    } catch (Exception e) {
+                        callback.onFailure();
+                    }
+                });
+    }
+
+    private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
+        try (java.io.InputStream input = new java.io.FileInputStream(inputFile);
+             java.io.OutputStream output =
+                     getContentResolver().openOutputStream(outputUri, "w")) {
+            if (output == null) throw new java.io.IOException("Cannot open output");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.flush();
+        }
+    }
+
+    private void showScheduleDialog(java.util.ArrayList<LinkItem> selected) {
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int)(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, 0, pad, 0);
+
+        final android.widget.Button start = new android.widget.Button(this);
+        final android.widget.Button end = new android.widget.Button(this);
+        final long[] times = {
+                System.currentTimeMillis() + 60000L,
+                System.currentTimeMillis() + 3600000L
+        };
+        java.text.SimpleDateFormat fmt =
+                new java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault());
+        start.setText("شروع: " + fmt.format(new java.util.Date(times[0])));
+        end.setText("پایان: " + fmt.format(new java.util.Date(times[1])));
+        box.addView(start);
+        box.addView(end);
+
+        android.view.View.OnClickListener picker = v -> {
+            int index = v == start ? 0 : 1;
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            cal.setTimeInMillis(times[index]);
+            new android.app.DatePickerDialog(this, (d, y, m, day) -> {
+                cal.set(y, m, day);
+                new android.app.TimePickerDialog(this, (t, h, min) -> {
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, h);
+                    cal.set(java.util.Calendar.MINUTE, min);
+                    cal.set(java.util.Calendar.SECOND, 0);
+                    times[index] = cal.getTimeInMillis();
+                    ((android.widget.Button)v).setText(
+                            (index == 0 ? "شروع: " : "پایان: ") + fmt.format(cal.getTime()));
+                }, cal.get(java.util.Calendar.HOUR_OF_DAY),
+                        cal.get(java.util.Calendar.MINUTE), true).show();
+            }, cal.get(java.util.Calendar.YEAR), cal.get(java.util.Calendar.MONTH),
+                    cal.get(java.util.Calendar.DAY_OF_MONTH)).show();
+        };
+        start.setOnClickListener(picker);
+        end.setOnClickListener(picker);
+
+        new AlertDialog.Builder(this)
+                .setTitle("زمان‌بندی دانلود")
+                .setMessage(selected.size() + " قسمت انتخاب شده")
+                .setView(box)
+                .setNegativeButton("لغو", null)
+                .setPositiveButton("زمان‌بندی",
+                        (d, w) -> scheduleDownload(selected, times[0], times[1]))
+                .show();
+    }
+
+    private void scheduleDownload(java.util.ArrayList<LinkItem> selected, long start, long end) {
+        if (end <= start) {
+            Toast.makeText(this, "زمان پایان باید بعد از شروع باشد", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            JSONArray array = new JSONArray();
+            for (LinkItem item : selected) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("title", item.title);
+                o.put("url", item.url);
+                array.put(o);
+            }
+            preferences.edit()
+                    .putString("scheduled_queue", array.toString())
+                    .putLong("scheduled_start", start)
+                    .putLong("scheduled_end", end)
+                    .apply();
+
+            Intent intent = new Intent(this, DownloadAlarmReceiver.class);
+            intent.setAction("SARRAST_START_DOWNLOAD");
+            PendingIntent pi = PendingIntent.getBroadcast(this, 77, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            AlarmManager alarm = (AlarmManager)getSystemService(ALARM_SERVICE);
+            if (Build.VERSION.SDK_INT >= 23) {
+                alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, start, pi);
+            } else {
+                alarm.setExact(AlarmManager.RTC_WAKEUP, start, pi);
+            }
+            Toast.makeText(this, "زمان‌بندی ذخیره شد", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در زمان‌بندی", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void openDownloads() {
+        java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        String[] projection = {
+                MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME
+        };
+        try (android.database.Cursor cursor = getContentResolver().query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection, null, null,
+                MediaStore.Downloads.DATE_ADDED + " DESC")) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(
+                            cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME));
+                    if (name != null && name.toLowerCase().endsWith(".pdf")) {
+                        long id = cursor.getLong(
+                                cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID));
+                        uris.add(Uri.withAppendedPath(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, String.valueOf(id)));
+                        names.add(name);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (names.isEmpty()) {
+            Toast.makeText(this, "PDF دانلودشده‌ای پیدا نشد", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("PDFهای دانلودشده")
+                .setItems(names.toArray(new String[0]),
+                        (d, which) -> startActivity(
+                                new Intent(this, PdfViewerActivity.class)
+                                        .setData(uris.get(which))))
+                .show();
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        Window window = getWindow();
+        window.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        window.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        hideSystemBars();
+
+        setContentView(R.layout.activity_main);
+
+        preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        loadingProgress = findViewById(R.id.loadingProgress);
+
+        WebView webView = findViewById(R.id.webView);
+        pdfButton = findViewById(R.id.pdfButton);
+        linksPdfButton = findViewById(R.id.linksPdfButton);
+
+        pdfButton.setOnClickListener(v -> exportCurrentPageToPdf(webView));
+        linksPdfButton.setOnClickListener(v -> chooseLinksForPdf(webView));
+        downloadsButton = findViewById(R.id.downloadsButton);
+        downloadsButton.setOnClickListener(v -> openDownloads());
+
+        webView.getSettings().setJavaScriptEnabled(true);
+        webView.getSettings().setDomStorageEnabled(true);
+        webView.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
+        webView.getSettings().setSupportMultipleWindows(false);
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, WebResourceRequest request) {
+                return handleUrl(view, request.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleUrl(view, Uri.parse(url));
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                showLoading();
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                saveLastUrl(url);
+                if (loadingProgress != null) {
+                    loadingProgress.setProgress(100);
+                    loadingProgress.setVisibility(View.GONE);
+                }
+            }
+
+            @Override
+            public void onReceivedError(
+                    WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                if (request.isForMainFrame() && loadingProgress != null) {
+                    loadingProgress.setVisibility(View.GONE);
+                }
+            }
+        });
+
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                if (loadingProgress != null) {
+                    if (newProgress < 100) {
+                        loadingProgress.setVisibility(View.VISIBLE);
+                        loadingProgress.setProgress(newProgress);
+                    } else {
+                        loadingProgress.setProgress(100);
+                    }
+                }
+            }
+        });
+
+        String scheduled = preferences.getString("scheduled_queue", null);
+        long scheduledEnd = preferences.getLong("scheduled_end", 0L);
+        if (scheduled != null && System.currentTimeMillis() < scheduledEnd) {
+            try {
+                JSONArray array = new JSONArray(scheduled);
+                java.util.ArrayList<LinkItem> queue = new java.util.ArrayList<>();
+                for (int i = 0; i < array.length(); i++) {
+                    org.json.JSONObject o = array.getJSONObject(i);
+                    queue.add(new LinkItem(o.optString("title"), o.optString("url")));
+                }
+                if (!queue.isEmpty()
+                        && System.currentTimeMillis() >=
+                        preferences.getLong("scheduled_start", 0L)) {
+                    batchEndTimeMillis = scheduledEnd;
+                    startBatchPdfDownload(queue);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        String lastUrl = preferences.getString(LAST_URL_KEY, null);
+        if (lastUrl != null && isAllowedTarget(Uri.parse(lastUrl))) {
+            showLoading();
+            webView.loadUrl(lastUrl);
+        } else {
+            showLoading();
+            webView.loadUrl(START_URL);
+        }
+    }
+
+    private void hideSystemBars() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
+    }
+
+    @Override
+    public void onBackPressed() {
+        WebView webView = findViewById(R.id.webView);
+        if (webView.canGoBack()) {
+            showLoading();
+            webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
 }
