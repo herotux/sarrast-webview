@@ -521,108 +521,75 @@ public class MainActivity extends Activity {
     }
 
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
-        webView.evaluateJavascript(
-                "(function(){var e=window.__sarrastScroller||document.scrollingElement||document.documentElement;" +
-                "var root=e===document.scrollingElement||e===document.documentElement;" +
-                "return JSON.stringify({w:window.innerWidth,h:window.innerHeight," +
-                "max:Math.max(0,e.scrollHeight-(root?window.innerHeight:e.clientHeight)),root:root});})()",
-                value -> {
-                    try {
-                        Object parsed = new org.json.JSONTokener(value).nextValue();
-                        if (parsed instanceof String) {
-                            parsed = new org.json.JSONTokener((String) parsed).nextValue();
-                        }
-                        org.json.JSONObject metrics = (org.json.JSONObject) parsed;
+        /*
+         * Important: WebView.draw() only paints the current viewport.
+         * For a page that the user has already scrolled through, that caused
+         * every PDF page to contain the same top viewport.
+         *
+         * WebView.enableSlowWholeDocumentDraw() is enabled at class load time.
+         * capturePicture() therefore records the complete document for normal
+         * document scrolling. We then split that recorded document into PDF
+         * pages without changing the WebView scroll position.
+         */
+        webView.post(() -> {
+            try {
+                android.graphics.Picture picture = webView.capturePicture();
 
-                        final int viewWidth = Math.max(1, metrics.optInt(
-                                "w", getResources().getDisplayMetrics().widthPixels));
-                        final int viewHeight = Math.max(1, metrics.optInt(
-                                "h", getResources().getDisplayMetrics().heightPixels));
-                        final int maxScroll = Math.max(0, metrics.optInt("max", 0));
-                        final boolean rootScroller = metrics.optBoolean("root", true);
+                if (picture == null || picture.getWidth() <= 0 || picture.getHeight() <= 0) {
+                    callback.onFailure();
+                    return;
+                }
 
-                        webView.measure(
-                                View.MeasureSpec.makeMeasureSpec(viewWidth, View.MeasureSpec.EXACTLY),
-                                View.MeasureSpec.makeMeasureSpec(viewHeight, View.MeasureSpec.EXACTLY));
-                        webView.layout(0, 0, viewWidth, viewHeight);
+                final int contentWidth = picture.getWidth();
+                final int contentHeight = picture.getHeight();
+                final int pageWidth = 595;
+                final int pageHeight = 842;
 
-                        final PdfDocument document = new PdfDocument();
-                        final int pageWidth = 595;
-                        final int pageHeight = 842;
-                        final int step = Math.max(1, viewHeight - 40);
+                // Fit the complete WebView width to the PDF page width.
+                final float scale = pageWidth / (float) contentWidth;
+                final float visibleContentHeight = pageHeight / scale;
 
-                        class Capture {
-                            int scrollY = 0;
-                            void next() {
-                                if (scrollY > maxScroll) {
-                                    finish();
-                                    return;
-                                }
+                PdfDocument document = new PdfDocument();
 
-                                final int current = scrollY;
-                                String script;
-                                if (rootScroller) {
-                                    script = "window.scrollTo(0," + current + ");" +
-                                            "void(window.__sarrastScroller=document.scrollingElement||document.documentElement);";
-                                } else {
-                                    script = "(function(){var e=window.__sarrastScroller;" +
-                                            "if(e)e.scrollTop=" + current + ";})()";
-                                }
+                for (float top = 0; top < contentHeight; top += visibleContentHeight) {
+                    PdfDocument.PageInfo info =
+                            new PdfDocument.PageInfo.Builder(
+                                    pageWidth,
+                                    pageHeight,
+                                    document.getPages().size() + 1
+                            ).create();
 
-                                webView.evaluateJavascript(script, ignored ->
-                                        webView.postDelayed(() -> {
-                                            try {
-                                                Bitmap bitmap = Bitmap.createBitmap(
-                                                        viewWidth, viewHeight, Bitmap.Config.ARGB_8888);
-                                                Canvas captureCanvas = new Canvas(bitmap);
-                                                webView.draw(captureCanvas);
+                    PdfDocument.Page page = document.startPage(info);
+                    Canvas canvas = page.getCanvas();
+                    canvas.drawColor(android.graphics.Color.WHITE);
+                    canvas.save();
 
-                                                PdfDocument.PageInfo info =
-                                                        new PdfDocument.PageInfo.Builder(
-                                                                pageWidth, pageHeight,
-                                                                document.getPages().size() + 1).create();
-                                                PdfDocument.Page page = document.startPage(info);
-                                                Canvas pdfCanvas = page.getCanvas();
-                                                pdfCanvas.drawColor(android.graphics.Color.WHITE);
-                                                pdfCanvas.save();
-                                                float scale = pageWidth / (float) viewWidth;
-                                                pdfCanvas.scale(scale, scale);
-                                                pdfCanvas.drawBitmap(bitmap, 0, 0, null);
-                                                pdfCanvas.restore();
-                                                document.finishPage(page);
-                                                bitmap.recycle();
+                    canvas.scale(scale, scale);
+                    canvas.clipRect(
+                            0,
+                            0,
+                            contentWidth,
+                            visibleContentHeight
+                    );
+                    canvas.translate(0, -top);
+                    picture.draw(canvas);
 
-                                                if (current >= maxScroll) {
-                                                    finish();
-                                                } else {
-                                                    scrollY = Math.min(maxScroll, current + step);
-                                                    next();
-                                                }
-                                            } catch (Exception e) {
-                                                document.close();
-                                                callback.onFailure();
-                                            }
-                                        }, 450));
-                            }
+                    canvas.restore();
+                    document.finishPage(page);
+                }
 
-                            void finish() {
-                                try (java.io.FileOutputStream out =
-                                             new java.io.FileOutputStream(file)) {
-                                    document.writeTo(out);
-                                    document.close();
-                                    callback.onSuccess();
-                                } catch (Exception e) {
-                                    try { document.close(); } catch (Exception ignored) {}
-                                    callback.onFailure();
-                                }
-                            }
-                        }
+                try (java.io.FileOutputStream out =
+                             new java.io.FileOutputStream(file)) {
+                    document.writeTo(out);
+                }
 
-                        new Capture().next();
-                    } catch (Exception e) {
-                        callback.onFailure();
-                    }
-                });
+                document.close();
+                callback.onSuccess();
+
+            } catch (Throwable e) {
+                callback.onFailure();
+            }
+        });
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
