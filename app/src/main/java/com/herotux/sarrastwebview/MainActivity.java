@@ -27,6 +27,15 @@ import android.widget.ArrayAdapter;
 import android.app.AlertDialog;
 import android.widget.ProgressBar;
 import android.widget.Toast;
+import android.widget.EditText;
+import android.text.InputType;
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission;
+import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 
 public class MainActivity extends Activity {
     private static final String START_URL =
@@ -46,6 +55,7 @@ public class MainActivity extends Activity {
     private int downloadedCount = 0;
     private String batchFolderName = "صفحه";
     private Uri currentPdfUri;
+    private String batchPdfPassword;
 
     private static class LinkItem {
         final String title;
@@ -244,16 +254,18 @@ public class MainActivity extends Activity {
                 }
 
                 dialog.dismiss();
-                startBatchPdfDownload(selected);
+                askForPdfPassword(password -> startBatchPdfDownload(selected, password));
             });
         });
 
         dialog.show();
     }
 
-    private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected) {
+    private void startBatchPdfDownload(java.util.ArrayList<LinkItem> selected, String password) {
         downloadQueue = selected;
-        String sourceTitle = getTitle();
+        batchPdfPassword = password;
+        String sourceTitle = findViewById(R.id.webView) instanceof WebView
+                ? ((WebView) findViewById(R.id.webView)).getTitle() : getTitle();
         if (TextUtils.isEmpty(sourceTitle)) {
             sourceTitle = "صفحه";
         }
@@ -355,9 +367,7 @@ public class MainActivity extends Activity {
             title = "sarrast-" + (downloadIndex + 1);
         }
 
-        String fileName = String.format(
-                java.util.Locale.US, "%02d-%s.pdf",
-                downloadIndex + 1, title);
+        String fileName = title + ".pdf";
 
         ContentValues values = new ContentValues();
         values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
@@ -379,15 +389,7 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            android.os.ParcelFileDescriptor pfd =
-                    getContentResolver().openFileDescriptor(
-                            currentPdfUri, "w");
-
-            if (pfd == null) {
-                skipCurrentDownload();
-                return;
-            }
-
+            File tempFile = new File(getCacheDir(), "sarrast_batch_" + System.nanoTime() + ".pdf");
             String jobName = title;
             PrintDocumentAdapter adapter =
                     backgroundWebView.createPrintDocumentAdapter(jobName);
@@ -399,75 +401,33 @@ public class MainActivity extends Activity {
                     .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
                     .build();
 
-            adapter.onLayout(
-                    null,
-                    attributes,
-                    attributes,
-                    new CancellationSignal(),
-                    new PrintDocumentAdapter.LayoutResultCallback() {
-                        @Override
-                        public void onLayoutFinished(
-                                android.print.PrintDocumentInfo info,
-                                boolean changed) {
-                            adapter.onWrite(
-                                    new PrintDocumentAdapter.PageRange[]{
-                                            android.print.PageRange.ALL_PAGES
-                                    },
-                                    pfd,
-                                    new CancellationSignal(),
-                                    new PrintDocumentAdapter.WriteResultCallback() {
-                                        @Override
-                                        public void onWriteFinished(
-                                                android.print.PageRange[] pages) {
-                                            adapter.onFinish();
-                                            try {
-                                                pfd.close();
-                                            } catch (Exception ignored) {
-                                            }
-
-                                            if (android.os.Build.VERSION.SDK_INT >= 29) {
-                                                ContentValues done =
-                                                        new ContentValues();
-                                                done.put(
-                                                        MediaStore.Downloads.IS_PENDING,
-                                                        0);
-                                                getContentResolver().update(
-                                                        currentPdfUri,
-                                                        done,
-                                                        null,
-                                                        null);
-                                            }
-
-                                            downloadedCount++;
-                                            currentPdfUri = null;
-                                            downloadIndex++;
-                                            loadNextBackgroundPage();
-                                        }
-
-                                        @Override
-                                        public void onWriteFailed(CharSequence error) {
-                                            adapter.onFinish();
-                                            try {
-                                                pfd.close();
-                                            } catch (Exception ignored) {
-                                            }
-                                            deleteCurrentPdf();
-                                            skipCurrentDownload();
-                                        }
-                                    });
+            writeAdapterToFile(adapter, attributes, tempFile, new PdfWriteCallback() {
+                @Override public void onSuccess() {
+                    try {
+                        encryptPdfFile(tempFile, currentPdfUri, batchPdfPassword);
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            ContentValues done = new ContentValues();
+                            done.put(MediaStore.Downloads.IS_PENDING, 0);
+                            getContentResolver().update(currentPdfUri, done, null, null);
                         }
-
-                        @Override
-                        public void onLayoutFailed(CharSequence error) {
-                            adapter.onFinish();
-                            try {
-                                pfd.close();
-                            } catch (Exception ignored) {
-                            }
-                            deleteCurrentPdf();
-                            skipCurrentDownload();
-                        }
-                    });
+                        tempFile.delete();
+                        downloadedCount++;
+                        currentPdfUri = null;
+                        downloadIndex++;
+                        loadNextBackgroundPage();
+                    } catch (Exception e) {
+                        tempFile.delete();
+                        deleteCurrentPdf();
+                        skipCurrentDownload();
+                    }
+                }
+                @Override public void onFailure() {
+                    tempFile.delete();
+                    deleteCurrentPdf();
+                    skipCurrentDownload();
+                }
+            });
+            });
         } catch (Exception e) {
             deleteCurrentPdf();
             skipCurrentDownload();
@@ -501,6 +461,7 @@ public class MainActivity extends Activity {
                 Toast.LENGTH_LONG).show();
 
         downloadQueue = null;
+        batchPdfPassword = null;
         downloadIndex = 0;
         downloadedCount = 0;
         batchFolderName = "صفحه";
@@ -515,77 +476,191 @@ public class MainActivity extends Activity {
 
     private void exportCurrentPageToPdf(WebView webView) {
         if (webView == null || webView.getUrl() == null) {
-            Toast.makeText(this, "صفحه‌ای برای خروجی PDF وجود ندارد",
-                    Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "صفحه‌ای برای خروجی PDF وجود ندارد", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        if (pdfButton != null) {
-            pdfButton.setEnabled(false);
-        }
+        askForPdfPassword(password -> {
+            if (pdfButton != null) pdfButton.setEnabled(false);
 
-        Toast.makeText(this, "در حال آماده‌سازی کل محتوای صفحه…",
-                Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "در حال آماده‌سازی و رمزگذاری PDF…", Toast.LENGTH_SHORT).show();
 
-        // Walk through the complete document first. This triggers lazy-loaded
-        // content/images as the page is scrolled, then returns to the top.
-        String script =
-                "(async function() {" +
-                "  const wait = ms => new Promise(r => setTimeout(r, ms));" +
-                "  let lastHeight = 0, stable = 0;" +
-                "  for (let i = 0; i < 80 && stable < 3; i++) {" +
-                "    const h = Math.max(document.body.scrollHeight," +
-                "      document.documentElement.scrollHeight);" +
-                "    window.scrollTo(0, h);" +
-                "    await wait(180);" +
-                "    const nh = Math.max(document.body.scrollHeight," +
-                "      document.documentElement.scrollHeight);" +
-                "    if (nh === lastHeight) stable++; else stable = 0;" +
-                "    lastHeight = nh;" +
-                "  }" +
-                "  window.scrollTo(0, 0);" +
-                "  await wait(500);" +
-                "  return true;" +
-                "})()";
+            String script =
+                    "(async function() {" +
+                    "  const wait = ms => new Promise(r => setTimeout(r, ms));" +
+                    "  let lastHeight = 0, stable = 0;" +
+                    "  for (let i = 0; i < 80 && stable < 3; i++) {" +
+                    "    const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
+                    "    window.scrollTo(0, h); await wait(180);" +
+                    "    const nh = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);" +
+                    "    if (nh === lastHeight) stable++; else stable = 0; lastHeight = nh;" +
+                    "  }" +
+                    "  window.scrollTo(0, 0); await wait(500); return true;" +
+                    "})()";
 
-        webView.evaluateJavascript(script, value -> {
-            PrintManager printManager =
-                    (PrintManager) getSystemService(Context.PRINT_SERVICE);
+            webView.evaluateJavascript(script, value -> {
+                String title = sanitizeFileName(webView.getTitle());
+                if (TextUtils.isEmpty(title)) title = "Sarrast";
+                File tempFile = new File(getCacheDir(), "sarrast_current_" + System.nanoTime() + ".pdf");
 
-            if (printManager == null) {
-                if (pdfButton != null) pdfButton.setEnabled(true);
-                Toast.makeText(this, "امکان ساخت PDF در این دستگاه وجود ندارد",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
+                PrintDocumentAdapter adapter = webView.createPrintDocumentAdapter(title);
+                PrintAttributes attributes = new PrintAttributes.Builder()
+                        .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                        .setResolution(new PrintAttributes.Resolution("sarrast_pdf", "PDF", 300, 300))
+                        .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                        .build();
 
-            String title = webView.getTitle();
-            if (title == null || title.trim().isEmpty()) {
-                title = "Sarrast";
-            }
+                writeAdapterToFile(adapter, attributes, tempFile, new PdfWriteCallback() {
+                    @Override public void onSuccess() {
+                        try {
+                            if (android.os.Build.VERSION.SDK_INT < 29) {
+                                throw new IllegalStateException("Android 10 or newer is required");
+                            }
+                            ContentValues values = new ContentValues();
+                            values.put(MediaStore.Downloads.DISPLAY_NAME, title + ".pdf");
+                            values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
+                            values.put(MediaStore.Downloads.RELATIVE_PATH,
+                                    android.os.Environment.DIRECTORY_DOWNLOADS + "/Sarrast/");
+                            values.put(MediaStore.Downloads.IS_PENDING, 1);
+                            Uri uri = getContentResolver().insert(
+                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                            if (uri == null) throw new IllegalStateException("Cannot create output file");
 
-            String jobName = title.replaceAll("[\\\\/:*?\\\"<>|]", "_")
-                    .trim();
-            if (jobName.isEmpty()) {
-                jobName = "Sarrast";
-            }
+                            encryptPdfFile(tempFile, uri, password);
 
-            android.print.PrintDocumentAdapter adapter =
-                    webView.createPrintDocumentAdapter(jobName);
+                            ContentValues done = new ContentValues();
+                            done.put(MediaStore.Downloads.IS_PENDING, 0);
+                            getContentResolver().update(uri, done, null, null);
+                            Toast.makeText(MainActivity.this,
+                                    "PDF رمزگذاری‌شده در Downloads/Sarrast ذخیره شد",
+                                    Toast.LENGTH_LONG).show();
+                        } catch (Exception ex) {
+                            Toast.makeText(MainActivity.this,
+                                    "خطا در ساخت PDF رمزگذاری‌شده", Toast.LENGTH_LONG).show();
+                        } finally {
+                            tempFile.delete();
+                            if (pdfButton != null) pdfButton.setEnabled(true);
+                        }
+                    }
 
-            PrintAttributes attributes = new PrintAttributes.Builder()
-                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                    .setResolution(new PrintAttributes.Resolution(
-                            "sarrast_pdf", "PDF", 300, 300))
-                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-                    .build();
-
-            printManager.print(jobName, adapter, attributes);
-
-            if (pdfButton != null) {
-                pdfButton.postDelayed(() -> pdfButton.setEnabled(true), 1000);
-            }
+                    @Override public void onFailure() {
+                        tempFile.delete();
+                        if (pdfButton != null) pdfButton.setEnabled(true);
+                        Toast.makeText(MainActivity.this,
+                                "خطا در ساخت PDF", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
         });
+    }
+
+    private interface PdfWriteCallback {
+        void onSuccess();
+        void onFailure();
+    }
+
+    private void writeAdapterToFile(PrintDocumentAdapter adapter,
+                                    PrintAttributes attributes,
+                                    File file,
+                                    PdfWriteCallback callback) {
+        try {
+            FileOutputStream output = new FileOutputStream(file);
+            android.os.ParcelFileDescriptor pfd =
+                    android.os.ParcelFileDescriptor.open(file,
+                            android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
+                                    | android.os.ParcelFileDescriptor.MODE_CREATE
+                                    | android.os.ParcelFileDescriptor.MODE_TRUNCATE);
+
+            adapter.onLayout(null, attributes, attributes, new CancellationSignal(),
+                    new PrintDocumentAdapter.LayoutResultCallback() {
+                        @Override public void onLayoutFinished(
+                                android.print.PrintDocumentInfo info, boolean changed) {
+                            adapter.onWrite(
+                                    new PrintDocumentAdapter.PageRange[]{android.print.PageRange.ALL_PAGES},
+                                    pfd, new CancellationSignal(),
+                                    new PrintDocumentAdapter.WriteResultCallback() {
+                                        @Override public void onWriteFinished(
+                                                android.print.PageRange[] pages) {
+                                            try { pfd.close(); } catch (Exception ignored) {}
+                                            try { output.close(); } catch (Exception ignored) {}
+                                            adapter.onFinish();
+                                            callback.onSuccess();
+                                        }
+
+                                        @Override public void onWriteFailed(CharSequence error) {
+                                            try { pfd.close(); } catch (Exception ignored) {}
+                                            try { output.close(); } catch (Exception ignored) {}
+                                            adapter.onFinish();
+                                            callback.onFailure();
+                                        }
+                                    });
+                        }
+
+                        @Override public void onLayoutFailed(CharSequence error) {
+                            try { pfd.close(); } catch (Exception ignored) {}
+                            try { output.close(); } catch (Exception ignored) {}
+                            adapter.onFinish();
+                            callback.onFailure();
+                        }
+                    });
+        } catch (Exception e) {
+            adapter.onFinish();
+            callback.onFailure();
+        }
+    }
+
+    private void encryptPdfFile(File inputFile, Uri outputUri, String password) throws Exception {
+        PDFBoxResourceLoader.init(getApplicationContext());
+
+        try (PDDocument document = PDDocument.load(inputFile);
+             java.io.OutputStream output = getContentResolver().openOutputStream(outputUri, "w")) {
+            if (output == null) throw new java.io.IOException("Cannot open output");
+
+            AccessPermission permissions = new AccessPermission();
+            permissions.setCanPrint(true);
+            permissions.setCanModify(false);
+            permissions.setCanExtractContent(false);
+            permissions.setCanModifyAnnotations(false);
+
+            StandardProtectionPolicy policy =
+                    new StandardProtectionPolicy(password, password, permissions);
+            policy.setEncryptionKeyLength(128);
+            document.protect(policy);
+            document.save(output);
+        }
+    }
+
+    private void askForPdfPassword(java.util.function.Consumer<String> onPassword) {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setHint("حداقل ۴ کاراکتر");
+
+        int pad = (int) (24 * getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        container.setPadding(pad, 0, pad, 0);
+        container.addView(input);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("رمز PDF")
+                .setMessage("این رمز برای باز کردن فایل PDF استفاده می‌شود.")
+                .setView(container)
+                .setNegativeButton("لغو", null)
+                .setPositiveButton("ادامه", null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String password = input.getText().toString();
+                if (password.length() < 4) {
+                    input.setError("رمز باید حداقل ۴ کاراکتر باشد");
+                    return;
+                }
+                dialog.dismiss();
+                onPassword.accept(password);
+            });
+        });
+        dialog.show();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -602,6 +677,7 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
 
+        PDFBoxResourceLoader.init(getApplicationContext());
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadingProgress = findViewById(R.id.loadingProgress);
 
