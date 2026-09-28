@@ -472,8 +472,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "در حال آماده‌سازی PDF…", Toast.LENGTH_SHORT).show();
         String script="(async function(){const w=ms=>new Promise(r=>setTimeout(r,ms));let last=0,stable=0;for(let i=0;i<80&&stable<3;i++){let h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.scrollTo(0,h);await w(120);let nh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);if(nh===last)stable++;else stable=0;last=nh;}window.scrollTo(0,0);await w(400);return true;})()";
         webView.evaluateJavascript(script,v -> {
-            String title=sanitizeFileName(webView.getTitle());
-            if(TextUtils.isEmpty(title)) title="Sarrast";
+            final String title = TextUtils.isEmpty(sanitizeFileName(webView.getTitle())) ? "Sarrast" : sanitizeFileName(webView.getTitle());
             File temp=new File(getCacheDir(),"sarrast_"+System.nanoTime()+".pdf");
             writeWebViewToPdf(webView,temp,new PdfWriteCallback(){
                 public void onSuccess(){try{
