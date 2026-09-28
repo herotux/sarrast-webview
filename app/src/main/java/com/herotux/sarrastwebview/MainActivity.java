@@ -461,6 +461,8 @@ public class MainActivity extends Activity {
                 Toast.LENGTH_LONG).show();
 
         downloadQueue = null;
+        preferences.edit().remove("scheduled_queue").remove("scheduled_start").remove("scheduled_end").apply();
+        batchEndTimeMillis = 0L;
         downloadIndex = 0;
         downloadedCount = 0;
         batchFolderName = "صفحه";
@@ -746,6 +748,7 @@ public class MainActivity extends Activity {
 
         pdfButton.setOnClickListener(v -> exportCurrentPageToPdf(webView));
         linksPdfButton.setOnClickListener(v -> chooseLinksForPdf(webView));
+        downloadsButton.setOnClickListener(v -> openDownloads());
 
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
@@ -802,6 +805,23 @@ public class MainActivity extends Activity {
                 }
             }
         });
+
+        String scheduled = preferences.getString("scheduled_queue", null);
+        long scheduledEnd = preferences.getLong("scheduled_end", 0L);
+        if (scheduled != null && System.currentTimeMillis() < scheduledEnd) {
+            try {
+                JSONArray array = new JSONArray(scheduled);
+                java.util.ArrayList<LinkItem> queue = new java.util.ArrayList<>();
+                for (int i = 0; i < array.length(); i++) {
+                    org.json.JSONObject o = array.getJSONObject(i);
+                    queue.add(new LinkItem(o.optString("title"), o.optString("url")));
+                }
+                if (!queue.isEmpty() && System.currentTimeMillis() >= preferences.getLong("scheduled_start", 0L)) {
+                    batchEndTimeMillis = scheduledEnd;
+                    startBatchPdfDownload(queue);
+                }
+            } catch (Exception ignored) {}
+        }
 
         String lastUrl = preferences.getString(LAST_URL_KEY, null);
         if (lastUrl != null && isAllowedTarget(Uri.parse(lastUrl))) {
