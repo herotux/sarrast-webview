@@ -11,8 +11,11 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
-import android.graphics.Canvas;
-import android.graphics.pdf.PdfDocument;
+import android.print.PrintAttributes;
+import android.print.PrintDocumentAdapter;
+import android.print.PrintManager;
+import android.os.CancellationSignal;
+import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.view.View;
@@ -497,39 +500,30 @@ public class MainActivity extends Activity {
 
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
         try {
-            int pageWidth = 595;
-            int pageHeight = 842;
-            int contentWidth = Math.max(1, webView.getWidth());
-            int contentHeight = Math.max(webView.getContentHeight() * Math.max(1, (int) webView.getScale()), webView.getHeight());
-            if (contentHeight <= 0) contentHeight = webView.getHeight();
+            PrintManager printManager = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+            PrintDocumentAdapter adapter = webView.createPrintDocumentAdapter("Sarrast");
+            PrintAttributes attributes = new PrintAttributes.Builder()
+                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                    .setResolution(new PrintAttributes.Resolution("sarrast", "Sarrast", 300, 300))
+                    .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                    .build();
 
-            float scale = pageWidth / (float) contentWidth;
-            int renderedHeight = Math.max(pageHeight, (int) Math.ceil(contentHeight * scale));
-            int pageCount = Math.max(1, (renderedHeight + pageHeight - 1) / pageHeight);
-
-            PdfDocument document = new PdfDocument();
-            try {
-                for (int i = 0; i < pageCount; i++) {
-                    PdfDocument.PageInfo info = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, i + 1).create();
-                    PdfDocument.Page page = document.startPage(info);
-                    Canvas canvas = page.getCanvas();
-                    canvas.save();
-                    canvas.scale(scale, scale);
-                    canvas.translate(0, -(i * pageHeight) / scale);
-                    webView.draw(canvas);
-                    canvas.restore();
-                    document.finishPage(page);
+            adapter.onLayout(null, attributes, null, new PrintDocumentAdapter.LayoutResultCallback() {
+                @Override public void onLayoutFinished(PrintDocumentInfo info, boolean changed) {
+                    adapter.onWrite(new PageRange[]{PageRange.ALL_PAGES}, ParcelFileDescriptor.open(
+                            file, ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_READ_WRITE),
+                            null, new PrintDocumentAdapter.WriteResultCallback() {
+                                @Override public void onWriteFinished(PageRange[] pages) {
+                                    callback.onSuccess();
+                                }
+                                @Override public void onWriteFailed(CharSequence error) {
+                                    callback.onFailure();
+                                }
+                            });
                 }
-                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
-                    document.writeTo(out);
-                }
-            } finally {
-                document.close();
-            }
-            callback.onSuccess();
-        } catch (Exception e) {
-            callback.onFailure();
-        }
+                @Override public void onLayoutFailed(CharSequence error) { callback.onFailure(); }
+            }, null);
+        } catch (Exception e) { callback.onFailure(); }
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
