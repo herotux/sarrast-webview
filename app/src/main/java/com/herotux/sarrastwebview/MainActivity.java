@@ -520,8 +520,6 @@ public class MainActivity extends Activity {
         void onFailure();
     }
 
-    private interface PdfWriteCallback { void onSuccess(); void onFailure(); }
-
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
         webView.post(() -> webView.evaluateJavascript(
                 "(function(){const out=[];const seen=new Set();document.querySelectorAll('img').forEach(function(i){try{const u=i.currentSrc||i.src||i.getAttribute('data-src')||i.getAttribute('data-lazy-src');if(u&&/^https?:/i.test(u)&&!seen.has(u)){seen.add(u);out.push(u);}}catch(e){}});return JSON.stringify(out);})()",
@@ -535,6 +533,8 @@ public class MainActivity extends Activity {
                     } catch (Exception e) { callback.onFailure(); }
                 }));
     }
+
+    private static class PdfState { final java.util.ArrayList<Bitmap> bitmaps = new java.util.ArrayList<>(); }
 
     private static class PdfState { final java.util.ArrayList<Bitmap> bitmaps = new java.util.ArrayList<>(); }
 
