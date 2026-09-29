@@ -532,13 +532,7 @@ public class MainActivity extends Activity {
                         createImagePdf(urls, 0, file, callback, new PdfState());
                     } catch (Exception e) { callback.onFailure(); }
                 }));
-    }
-
-    private static class PdfState { final java.util.ArrayList<Bitmap> bitmaps = new java.util.ArrayList<>(); }
-
-    private static class PdfState { final java.util.ArrayList<Bitmap> bitmaps = new java.util.ArrayList<>(); }
-
-    private void createImagePdf(JSONArray urls, int index, File file, PdfWriteCallback callback, PdfState state) {
+    }private void createImagePdf(JSONArray urls, int index, File file, PdfWriteCallback callback, PdfState state) {
         if (index >= urls.length()) {
             new Thread(() -> {
                 PdfDocument document = new PdfDocument();
