@@ -520,168 +520,104 @@ public class MainActivity extends Activity {
         void onFailure();
     }
 
+    private interface PdfWriteCallback { void onSuccess(); void onFailure(); }
+
     private void writeWebViewToPdf(WebView webView, File file, PdfWriteCallback callback) {
-        /*
-         * Use Chromium's native WebView print renderer instead of WebView.draw(),
-         * capturePicture(), or bitmap screenshots. Those APIs can return a blank
-         * or black surface when the WebView is hardware rendered or when the page
-         * uses a nested scrolling container.
-         *
-         * The DOM is flattened immediately before printing so a custom scroll
-         * container is treated as normal document content.
-         */
-        webView.post(() -> prepareWebViewForPrint(webView, file, callback));
+        webView.post(() -> webView.evaluateJavascript(
+                "(function(){const out=[];const seen=new Set();document.querySelectorAll('img').forEach(function(i){try{const u=i.currentSrc||i.src||i.getAttribute('data-src')||i.getAttribute('data-lazy-src');if(u&&/^https?:/i.test(u)&&!seen.has(u)){seen.add(u);out.push(u);}}catch(e){}});return JSON.stringify(out);})()",
+                value -> {
+                    try {
+                        Object parsed = new org.json.JSONTokener(value).nextValue();
+                        if (parsed instanceof String) parsed = new org.json.JSONTokener((String) parsed).nextValue();
+                        JSONArray urls = (JSONArray) parsed;
+                        if (urls.length() == 0) { callback.onFailure(); return; }
+                        createImagePdf(urls, 0, file, callback, new PdfState());
+                    } catch (Exception e) { callback.onFailure(); }
+                }));
     }
 
-    private void prepareWebViewForPrint(
-            WebView webView,
-            File file,
-            PdfWriteCallback callback) {
+    private static class PdfState { final java.util.ArrayList<Bitmap> bitmaps = new java.util.ArrayList<>(); }
 
-        String script =
-                "(function(){" +
-                "try{" +
-                "const all=document.querySelectorAll('*');" +
-                "const saved=[];" +
-                "all.forEach(function(e){" +
-                " const s=getComputedStyle(e);" +
-                " if((s.overflowY==='auto'||s.overflowY==='scroll')&&e.scrollHeight>e.clientHeight+20){" +
-                "   saved.push([e,e.style.overflow,e.style.overflowY,e.style.height,e.style.maxHeight,e.style.position]);" +
-                "   e.style.overflow='visible';" +
-                "   e.style.overflowY='visible';" +
-                "   e.style.height='auto';" +
-                "   e.style.maxHeight='none';" +
-                " }" +
-                "});" +
-                "window.__sarrastPrintSaved=saved;" +
-                "window.scrollTo(0,0);" +
-                "return 'ok';" +
-                "}catch(e){return 'error';}" +
-                "})()";
-
-        webView.evaluateJavascript(script, ignored ->
-                webView.postDelayed(
-                        () -> printWebViewToPdf(webView, file, callback),
-                        800));
-    }
-
-    private void printWebViewToPdf(
-            WebView webView,
-            File file,
-            PdfWriteCallback callback) {
-
-        try {
-            android.print.PrintManager printManager =
-                    (android.print.PrintManager) getSystemService(PRINT_SERVICE);
-
-            android.print.PrintDocumentAdapter adapter =
-                    webView.createPrintDocumentAdapter("Sarrast");
-
-            android.print.PrintAttributes attributes =
-                    new android.print.PrintAttributes.Builder()
-                            .setMediaSize(android.print.PrintAttributes.MediaSize.ISO_A4)
-                            .setResolution(new android.print.PrintAttributes.Resolution(
-                                    "sarrast_pdf", "Sarrast PDF", 300, 300))
-                            .setMinMargins(android.print.PrintAttributes.Margins.NO_MARGINS)
-                            .build();
-
-            android.os.ParcelFileDescriptor descriptor =
-                    android.os.ParcelFileDescriptor.open(
-                            file,
-                            android.os.ParcelFileDescriptor.MODE_CREATE
-                                    | android.os.ParcelFileDescriptor.MODE_TRUNCATE
-                                    | android.os.ParcelFileDescriptor.MODE_READ_WRITE);
-
-            adapter.onLayout(
-                    null,
-                    attributes,
-                    null,
-                    new android.print.PrintDocumentAdapter.LayoutResultCallback() {
-                        @Override
-                        public void onLayoutFinished(
-                                android.print.PrintDocumentInfo info,
-                                boolean changed) {
-                            adapter.onWrite(
-                                    new android.print.PageRange[]{
-                                            android.print.PageRange.ALL_PAGES
-                                    },
-                                    descriptor,
-                                    null,
-                                    new android.print.PrintDocumentAdapter.WriteResultCallback() {
-                                        @Override
-                                        public void onWriteFinished(
-                                                android.print.PageRange[] pages) {
-                                            try {
-                                                descriptor.close();
-                                            } catch (Exception ignored) {
-                                            }
-                                            restoreWebViewAfterPrint(webView);
-                                            callback.onSuccess();
-                                        }
-
-                                        @Override
-                                        public void onWriteFailed(CharSequence error) {
-                                            try {
-                                                descriptor.close();
-                                            } catch (Exception ignored) {
-                                            }
-                                            restoreWebViewAfterPrint(webView);
-                                            callback.onFailure();
-                                        }
-
-                                        @Override
-                                        public void onWriteCancelled() {
-                                            try {
-                                                descriptor.close();
-                                            } catch (Exception ignored) {
-                                            }
-                                            restoreWebViewAfterPrint(webView);
-                                            callback.onFailure();
-                                        }
-                                    });
-                        }
-
-                        @Override
-                        public void onLayoutFailed(CharSequence error) {
-                            try {
-                                descriptor.close();
-                            } catch (Exception ignored) {
-                            }
-                            restoreWebViewAfterPrint(webView);
-                            callback.onFailure();
-                        }
-
-                        @Override
-                        public void onLayoutCancelled() {
-                            try {
-                                descriptor.close();
-                            } catch (Exception ignored) {
-                            }
-                            restoreWebViewAfterPrint(webView);
-                            callback.onFailure();
-                        }
-                    },
-                    null);
-        } catch (Throwable e) {
-            restoreWebViewAfterPrint(webView);
-            callback.onFailure();
+    private void createImagePdf(JSONArray urls, int index, File file, PdfWriteCallback callback, PdfState state) {
+        if (index >= urls.length()) {
+            new Thread(() -> {
+                PdfDocument document = new PdfDocument();
+                try {
+                    for (Bitmap bitmap : state.bitmaps) appendBitmapToPdf(document, bitmap);
+                    if (document.getPages().isEmpty()) throw new Exception("No PDF pages");
+                    try (java.io.FileOutputStream output = new java.io.FileOutputStream(file)) { document.writeTo(output); }
+                    runOnUiThread(callback::onSuccess);
+                } catch (Throwable e) {
+                    runOnUiThread(callback::onFailure);
+                } finally {
+                    document.close();
+                    for (Bitmap bitmap : state.bitmaps) try { bitmap.recycle(); } catch (Exception ignored) {}
+                    state.bitmaps.clear();
+                }
+            }).start();
+            return;
         }
+        final String imageUrl = urls.optString(index, "");
+        new Thread(() -> {
+            Bitmap bitmap = downloadImageBitmap(imageUrl);
+            if (bitmap == null) { runOnUiThread(callback::onFailure); return; }
+            state.bitmaps.add(bitmap);
+            runOnUiThread(() -> createImagePdf(urls, index + 1, file, callback, state));
+        }).start();
     }
 
-    private void restoreWebViewAfterPrint(WebView webView) {
-        webView.postDelayed(() -> webView.evaluateJavascript(
-                "(function(){try{" +
-                "const saved=window.__sarrastPrintSaved||[];" +
-                "saved.forEach(function(x){" +
-                "x[0].style.overflow=x[1];" +
-                "x[0].style.overflowY=x[2];" +
-                "x[0].style.height=x[3];" +
-                "x[0].style.maxHeight=x[4];" +
-                "x[0].style.position=x[5];" +
-                "});" +
-                "window.__sarrastPrintSaved=null;" +
-                "}catch(e){}})()",
-                null), 100);
+    private Bitmap downloadImageBitmap(String imageUrl) {
+        try {
+            java.net.URL url = new java.net.URL(imageUrl);
+            String cookies = android.webkit.CookieManager.getInstance().getCookie(imageUrl);
+            android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            java.net.HttpURLConnection c = openImageConnection(url, cookies);
+            java.io.InputStream in = c.getInputStream();
+            android.graphics.BitmapFactory.decodeStream(in, null, bounds);
+            in.close(); c.disconnect();
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            int sample = 1, maxDimension = 2200;
+            while (Math.max(bounds.outWidth / sample, bounds.outHeight / sample) > maxDimension) sample *= 2;
+            c = openImageConnection(url, cookies);
+            in = c.getInputStream();
+            android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+            options.inSampleSize = sample;
+            options.inPreferredConfig = Bitmap.Config.RGB_565;
+            Bitmap bitmap = android.graphics.BitmapFactory.decodeStream(in, null, options);
+            in.close(); c.disconnect();
+            return bitmap;
+        } catch (Throwable e) { return null; }
+    }
+
+    private java.net.HttpURLConnection openImageConnection(java.net.URL url, String cookies) throws Exception {
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+        c.setConnectTimeout(20000); c.setReadTimeout(30000); c.setInstanceFollowRedirects(true);
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36");
+        if (cookies != null && !cookies.isEmpty()) c.setRequestProperty("Cookie", cookies);
+        c.connect();
+        if (c.getResponseCode() < 200 || c.getResponseCode() >= 300) { c.disconnect(); throw new java.io.IOException("HTTP " + c.getResponseCode()); }
+        return c;
+    }
+
+    private void appendBitmapToPdf(PdfDocument document, Bitmap bitmap) {
+        final int pageWidth = 595, pageHeight = 842;
+        float scale = Math.min((float) pageWidth / bitmap.getWidth(), (float) pageHeight / bitmap.getHeight());
+        float drawWidth = bitmap.getWidth() * scale, drawHeight = bitmap.getHeight() * scale;
+        if (drawHeight <= pageHeight + 1) {
+            PdfDocument.Page page = document.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, document.getPages().size() + 1).create());
+            float left = (pageWidth - drawWidth) / 2f, top = (pageHeight - drawHeight) / 2f;
+            page.getCanvas().drawBitmap(bitmap, null, new android.graphics.RectF(left, top, left + drawWidth, top + drawHeight), null);
+            document.finishPage(page); return;
+        }
+        int sourceSliceHeight = Math.max(1, (int) (pageHeight / scale));
+        for (int y = 0; y < bitmap.getHeight(); y += sourceSliceHeight) {
+            int h = Math.min(sourceSliceHeight, bitmap.getHeight() - y);
+            Bitmap slice = Bitmap.createBitmap(bitmap, 0, y, bitmap.getWidth(), h);
+            PdfDocument.Page page = document.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, document.getPages().size() + 1).create());
+            page.getCanvas().drawBitmap(slice, null, new android.graphics.RectF(0, 0, pageWidth, h * scale), null);
+            document.finishPage(page); slice.recycle();
+        }
     }
 
     private void copyFileToUri(File inputFile, Uri outputUri) throws Exception {
